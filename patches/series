@@ -83,6 +83,7 @@ extra/ungoogled-chromium/add-flag-to-clear-data-on-exit.patch
 extra/ungoogled-chromium/add-flag-for-qr-generator.patch
 extra/ungoogled-chromium/add-flag-for-grab-handle.patch
 extra/ungoogled-chromium/add-flag-for-close-confirmation.patch
+extra/ungoogled-chromium/add-mcp-sidecar-launcher.patch
 extra/ungoogled-chromium/keep-expired-flags.patch
 extra/ungoogled-chromium/add-flag-for-custom-ntp.patch
 extra/ungoogled-chromium/add-flag-for-tab-hover-cards.patch

@@ -1,0 +1,205 @@
+--- /dev/null
++++ b/chrome/browser/mcp_sidecar_launcher.h
+@@ -0,0 +1,85 @@
++// Copyright (c) 2026 The ungoogled-chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Launches and supervises the EDI MCP sidecar (edi.exe), a standalone
++// process bundled next to the browser executable that serves the built-in
++// Model Context Protocol (MCP) endpoint over loopback.
++//
++// The launcher is deliberately minimal: it only spawns the sidecar with the
++// browser's user-data (profile) directory and watches the sidecar's exit
++// code. It performs no network I/O and reads or writes no files of its own;
++// CDP discovery (DevToolsActivePort) and the MCP transport are the
++// sidecar's own responsibility.
++//
++// All methods must be called on the browser process UI thread.
++
++#ifndef CHROME_BROWSER_MCP_SIDECAR_LAUNCHER_H_
++#define CHROME_BROWSER_MCP_SIDECAR_LAUNCHER_H_
++
++#include <memory>
++
++#include "base/files/file_path.h"
++#include "base/process/process.h"
++#include "base/timer/timer.h"
++
++// Locates the bundled EDI sidecar executable and, if present, spawns and
++// supervises it for the lifetime of the browser process.
++class McpSidecarLauncher {
++ public:
++  // Locates the sidecar executable (edi.exe) in |exe_dir| and, if present,
++  // spawns it with `--profile-dir <profile_dir>` and starts supervising it.
++  //
++  // Returns nullptr, after logging a warning, if the sidecar executable is
++  // missing or cannot be launched; the browser starts and runs normally
++  // without the sidecar in either case.
++  //
++  // Must be called on the browser process UI thread.
++  static std::unique_ptr<McpSidecarLauncher> Start(
++      const base::FilePath& exe_dir, const base::FilePath& profile_dir);
++
++  McpSidecarLauncher(const McpSidecarLauncher&) = delete;
++  McpSidecarLauncher& operator=(const McpSidecarLauncher&) = delete;
++
++  // Stops supervising the sidecar. Safe to call more than once. Call this
++  // during a clean browser shutdown so that a sidecar exit triggered by the
++  // browser going away is never treated as a relaunchable failure.
++  void Shutdown();
++
++  ~McpSidecarLauncher();
++
++ private:
++  McpSidecarLauncher(base::Process process,
++                     const base::FilePath& exe_path,
++                     const base::FilePath& profile_dir);
++
++  // Spawns the sidecar executable. Returns an invalid process if the launch
++  // failed.
++  static base::Process LaunchSidecar(const base::FilePath& exe_path,
++                                     const base::FilePath& profile_dir);
++
++  // Invoked periodically by |timer_| to check whether the sidecar has exited,
++  // and to relaunch it if it exited with the port-conflict code.
++  void OnSuperviseTimerFired();
++
++  // The sidecar's executable file name, expected next to the browser
++  // executable.
++  static constexpr char kSidecarExecutableName[] = "edi.exe";
++  // The sidecar's exit code meaning its MCP port is already in use; the
++  // sidecar expects to be relaunched so it can pick a different port.
++  static constexpr int kSidecarExitPortConflict = 2;
++  // The maximum number of times the sidecar is relaunched after a
++  // port-conflict exit.
++  static constexpr int kMaxRelaunches = 1;
++
++  base::Process process_;
++  const base::FilePath exe_path_;
++  const base::FilePath profile_dir_;
++  // Relaunches still allowed after a port-conflict exit.
++  int relaunches_remaining_ = kMaxRelaunches;
++  // Set by Shutdown(); prevents any relaunch during browser shutdown.
++  bool shutting_down_ = false;
++  base::RepeatingTimer timer_;
++};
++
++#endif  // CHROME_BROWSER_MCP_SIDECAR_LAUNCHER_H_
+--- /dev/null
++++ b/chrome/browser/mcp_sidecar_launcher.cc
+@@ -0,0 +1,114 @@
++// Copyright (c) 2026 The ungoogled-chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/mcp_sidecar_launcher.h"
++
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "base/process/launch.h"
++#include "base/time/time.h"
++#include "build/build_config.h"
++
++namespace {
++
++// How often the supervisor checks the sidecar's state.
++const base::TimeDelta kSuperviseInterval = base::Seconds(2);
++
++}  // namespace
++
++std::unique_ptr<McpSidecarLauncher> McpSidecarLauncher::Start(
++    const base::FilePath& exe_dir, const base::FilePath& profile_dir) {
++  const base::FilePath exe_path = exe_dir.Append(kSidecarExecutableName);
++  if (!base::PathExists(exe_path)) {
++    LOG(WARNING) << "EDI sidecar not found at " << exe_path.value()
++                 << "; the browser will start without the built-in MCP server.";
++    return nullptr;
++  }
++
++  base::Process process = LaunchSidecar(exe_path, profile_dir);
++  if (!process.IsValid()) {
++    LOG(WARNING) << "Failed to launch the EDI sidecar at "
++                 << exe_path.value();
++    return nullptr;
++  }
++
++  return std::make_unique<McpSidecarLauncher>(std::move(process),
++                                              std::move(exe_path),
++                                              profile_dir);
++}
++
++McpSidecarLauncher::McpSidecarLauncher(base::Process process,
++                                       const base::FilePath& exe_path,
++                                       const base::FilePath& profile_dir)
++    : process_(std::move(process)),
++      exe_path_(exe_path),
++      profile_dir_(profile_dir) {
++  timer_.Start(FROM_HERE, kSuperviseInterval, this,
++               &McpSidecarLauncher::OnSuperviseTimerFired);
++}
++
++McpSidecarLauncher::~McpSidecarLauncher() {
++  // A destroyed launcher must never relaunch the sidecar, even if the browser
++  // process is tearing down.
++  Shutdown();
++}
++
++void McpSidecarLauncher::Shutdown() {
++  shutting_down_ = true;
++  timer_.Stop();
++}
++
++base::Process McpSidecarLauncher::LaunchSidecar(
++    const base::FilePath& exe_path, const base::FilePath& profile_dir) {
++  base::CommandLine command_line(exe_path);
++  // The sidecar CLI takes the flag and its value as separate arguments:
++  //   edi.exe --profile-dir <profile_dir>
++  command_line.AppendArg("--profile-dir");
++  command_line.AppendArgPath(profile_dir);
++
++  base::LaunchOptions options;
++#if BUILDFLAG(IS_WIN)
++  // The sidecar is a background service and must not open a console window.
++  options.start_hidden = true;
++#endif  // BUILDFLAG(IS_WIN)
++
++  return base::LaunchProcess(command_line, options);
++}
++
++void McpSidecarLauncher::OnSuperviseTimerFired() {
++  if (shutting_down_) {
++    timer_.Stop();
++    return;
++  }
++  if (!process_.IsValid()) {
++    timer_.Stop();
++    return;
++  }
++
++  // Non-blocking: returns true, with the exit code, only if the sidecar has
++  // already exited.
++  int exit_code = 0;
++  if (!process_.WaitForExitWithTimeout(base::TimeDelta(), &exit_code)) {
++    return;  // The sidecar is still running.
++  }
++
++  if (exit_code == kSidecarExitPortConflict && relaunches_remaining_ > 0) {
++    relaunches_remaining_--;
++    LOG(INFO) << "EDI sidecar exited with the port-conflict code " << exit_code
++              << "; relaunching it (" << relaunches_remaining_
++              << " relaunch(es) remaining).";
++    base::Process relaunched = LaunchSidecar(exe_path_, profile_dir_);
++    if (relaunched.IsValid()) {
++      process_ = std::move(relaunched);
++      return;  // Keep supervising the new process.
++    }
++    LOG(WARNING) << "Failed to relaunch the EDI sidecar at "
++                 << exe_path_.value();
++  } else {
++    LOG(INFO) << "EDI sidecar exited with code " << exit_code
++              << "; stopping supervision.";
++  }
++
++  timer_.Stop();
++}
