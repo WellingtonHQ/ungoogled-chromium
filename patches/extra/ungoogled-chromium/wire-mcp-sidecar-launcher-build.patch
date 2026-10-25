@@ -1,0 +1,10 @@
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -856,5 +856,7 @@ source_set("core") {
+     "global_features.cc",
+     "icon_manager.cc",
+     "intranet_redirect_detector.cc",
++    "mcp_sidecar_launcher.cc",
++    "mcp_sidecar_launcher.h",
+     "memory_details.cc",
+     "net_benchmarking.cc",

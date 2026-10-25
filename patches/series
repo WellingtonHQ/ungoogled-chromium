@@ -85,6 +85,7 @@ extra/ungoogled-chromium/add-flag-for-grab-handle.patch
 extra/ungoogled-chromium/add-flag-for-close-confirmation.patch
 extra/ungoogled-chromium/add-mcp-sidecar-launcher.patch
 extra/ungoogled-chromium/add-edi-switch.patch
+extra/ungoogled-chromium/wire-mcp-sidecar-launcher-build.patch
 extra/ungoogled-chromium/keep-expired-flags.patch
 extra/ungoogled-chromium/add-flag-for-custom-ntp.patch
 extra/ungoogled-chromium/add-flag-for-tab-hover-cards.patch
