@@ -1,0 +1,79 @@
+--- a/chrome/installer/mini_installer/BUILD.gn
++++ b/chrome/installer/mini_installer/BUILD.gn
+@@ -129,6 +129,20 @@ group("setup_runtime_deps") {
+   data_deps = [ "//chrome/installer/setup" ]
+ }
+ 
++# The EDI MCP sidecar (edi.exe) is built outside the Chromium tree (a Rust
++# release build in the EDI workspace). Copy it into the output directory so
++# the browser's built-in launcher finds it beside chrome.exe and the
++# installer packages it alongside the browser.
++action("edi_sidecar") {
++  script = "copy_edi_sidecar.py"
++  inputs = [ "C:/Users/moreno/Documents/Code/WellingtonHQ/EDI/target/release/edi.exe" ]
++  outputs = [ "$root_out_dir/edi.exe" ]
++  args = [
++    rebase_path(inputs[0], root_build_dir),
++    rebase_path(outputs[0], root_build_dir),
++  ]
++}
++
+ packed_files_rc_file = "$target_gen_dir/mini_installer/packed_files.rc"
+ 
+ # Debug builds must not exceed the 2GB limit in order to avoid corrupting the
+@@ -152,6 +166,7 @@ action("mini_installer_archive") {
+     "$root_out_dir/chrome.dll",
+     "$root_out_dir/chrome_elf.dll",
+     "$root_out_dir/chrome.exe",
++    "$root_out_dir/edi.exe",
+     "$root_out_dir/locales/en-US.pak",
+     "$root_out_dir/setup.exe",
+     "//chrome/tools/build/win/makecab.py",
+@@ -191,7 +206,8 @@ action("mini_installer_archive") {
+   deps = [
+     ":chrome_runtime_deps",
+     ":setup_runtime_deps",
++    ":edi_sidecar",
+     "//chrome",
+     "//chrome:chrome_dll",
+     "//chrome/browser/extensions/default_extensions",
+     "//chrome/chrome_elf",
+--- a/chrome/installer/mini_installer/chrome.release
++++ b/chrome/installer/mini_installer/chrome.release
+@@ -8,6 +8,7 @@
+ #
+ chrome.exe: %(ChromeDir)s\
+ chrome_proxy.exe: %(ChromeDir)s\
++edi.exe: %(ChromeDir)s\
+ #
+ # Chrome version dir assembly manifest.
+ # The name of this file must match the name of the version dir, so we cannot
+--- /dev/null
++++ b/chrome/installer/mini_installer/copy_edi_sidecar.py
+@@ -0,0 +1,26 @@
++#!/usr/bin/env python3
++# -*- coding: utf-8 -*-
++
++# Copyright (c) 2026 The ungoogled-chromium Authors. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++"""Copies the EDI MCP sidecar binary into the build output directory.
++
++The sidecar (edi.exe) is built separately from the browser (a Rust release
++build in the EDI workspace) and is copied next to chrome.exe so that the
++browser's built-in launcher can find it and the Windows installer packages
++it alongside the browser.
++"""
++
++import shutil
++import sys
++
++
++def main():
++    if len(sys.argv) != 3:
++        raise SystemExit('usage: copy_edi_sidecar.py <source> <destination>')
++    shutil.copyfile(sys.argv[1], sys.argv[2])
++
++
++if __name__ == '__main__':
++    main()
