@@ -1,6 +1,6 @@
 --- a/chrome/app/chrome_main.cc
 +++ b/chrome/app/chrome_main.cc
-@@ -167,9 +167,20 @@
+@@ -167,9 +167,21 @@
    // Capture the unpolluted command line snapshot in the browser process.
    // This must happen immediately after CommandLine::Init to ensure we capture
    // the state before any internal programmatic mutations.
@@ -9,12 +9,13 @@
    }
  
 +  // The built-in EDI MCP sidecar (chrome://flags "EDI MCP Sidecar", enabled
-+  // with --edi=enable) discovers the browser's CDP endpoint from the
-+  // DevToolsActivePort file, which is only written when the browser is
-+  // launched with --remote-debugging-port=0. That file is written by the
-+  // DevTools HTTP server started during BrowserMainLoop::Main, so the switch
-+  // must be present on the command line before ContentMain runs.
-+  if (command_line->GetSwitchValueASCII("edi") == "enable" &&
++  // by default; use --edi=disable to opt out) discovers the browser's CDP
++  // endpoint from the DevToolsActivePort file, which is only written when
++  // the browser is launched with --remote-debugging-port=0. That file is
++  // written by the DevTools HTTP server started during
++  // BrowserMainLoop::Main, so the switch must be present on the command
++  // line before ContentMain runs.
++  if (command_line->GetSwitchValueASCII("edi") != "disable" &&
 +      !command_line->HasSwitch(switches::kProcessType) &&
 +      !command_line->HasSwitch(switches::kRemoteDebuggingPort)) {
 +    command_line->AppendSwitchASCII(switches::kRemoteDebuggingPort, "0");
@@ -35,8 +36,8 @@
  
    std::unique_ptr<BrowserProcessImpl> browser_process_;
  
-+  // Launches and supervises the bundled EDI MCP sidecar, if the --edi switch
-+  // is enabled. Created in PreMainMessageLoopRun(); shut down in
++  // Launches and supervises the bundled EDI MCP sidecar, which is enabled
++  // by default. Created in PreMainMessageLoopRun(); shut down in
 +  // PostMainMessageLoopRun().
 +  std::unique_ptr<McpSidecarLauncher> mcp_sidecar_launcher_;
 +
@@ -50,16 +51,17 @@
 +#include "chrome/browser/mcp_sidecar_launcher.h"
  #include "chrome/browser/metrics/chrome_browser_main_extra_parts_metrics.h"
  #include "chrome/browser/metrics/chrome_feature_list_creator.h"
-@@ -1507,7 +1508,18 @@
+@@ -1507,7 +1508,19 @@
  int ChromeBrowserMainParts::PreMainMessageLoopRun() {
    TRACE_EVENT0("startup", "ChromeBrowserMainParts::PreMainMessageLoopRun");
  
-+  // Launch the bundled EDI MCP sidecar, if enabled via the --edi switch
-+  // (chrome://flags "EDI MCP Sidecar"). The sidecar discovers the browser's
-+  // CDP endpoint from the DevToolsActivePort file written by the DevTools
-+  // HTTP server, and serves MCP on an ephemeral loopback port.
-+  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("edi") ==
-+      "enable") {
++  // Launch the bundled EDI MCP sidecar, which is enabled by default
++  // (chrome://flags "EDI MCP Sidecar"); use --edi=disable to opt out. The
++  // sidecar discovers the browser's CDP endpoint from the
++  // DevToolsActivePort file written by the DevTools HTTP server, and serves
++  // MCP on an ephemeral loopback port.
++  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("edi") !=
++      "disable") {
 +    mcp_sidecar_launcher_ = McpSidecarLauncher::Start(
 +        base::PathService::CheckedGet(base::FILE_EXE).DirName(),
 +        base::PathService::CheckedGet(chrome::DIR_USER_DATA));
@@ -90,8 +92,8 @@
      {"Qualcomm Adreno 610", kSpoofWebGL_Qualcomm, nullptr},
  };
 +const FeatureEntry::Choice kEdiMcpSidecar[] = {
-+    {flags_ui::kGenericExperimentChoiceDefault, "", ""},
 +    {"Enable", "edi", "enable"},
++    {"Disable", "edi", "disable"},
 +};
  #endif  // CHROME_BROWSER_UNGOOGLED_FLAG_CHOICES_H_
 --- a/chrome/browser/ungoogled_flag_entries.h
@@ -102,6 +104,6 @@
       kOsDesktop, SINGLE_VALUE_TYPE("hide-window-buttons")},
 +    {"edi",
 +     "EDI MCP Sidecar",
-+     "Launch the built-in EDI MCP sidecar (edi.exe) beside the browser and enable CDP on an ephemeral loopback port. ungoogled-chromium flag.",
++     "Launch the built-in EDI MCP sidecar (edi.exe) beside the browser and enable CDP on an ephemeral loopback port. Enabled by default; select Disable to turn it off. ungoogled-chromium flag.",
 +     kOsDesktop, MULTI_VALUE_TYPE(kEdiMcpSidecar)},
  #endif  // CHROME_BROWSER_UNGOOGLED_FLAG_ENTRIES_H_
