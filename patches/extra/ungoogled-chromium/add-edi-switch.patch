@@ -61,7 +61,7 @@
 +  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("edi") ==
 +      "enable") {
 +    mcp_sidecar_launcher_ = McpSidecarLauncher::Start(
-+        base::FilePath::Dirname(base::PathService::CheckedGet(base::FILE_EXE)),
++        base::PathService::CheckedGet(base::FILE_EXE).DirName(),
 +        base::PathService::CheckedGet(chrome::DIR_USER_DATA));
 +  }
 +

@@ -88,7 +88,7 @@
 +#endif  // CHROME_BROWSER_MCP_SIDECAR_LAUNCHER_H_
 --- /dev/null
 +++ b/chrome/browser/mcp_sidecar_launcher.cc
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,118 @@
 +// Copyright (c) 2026 The ungoogled-chromium Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -110,7 +110,8 @@
 +
 +std::unique_ptr<McpSidecarLauncher> McpSidecarLauncher::Start(
 +    const base::FilePath& exe_dir, const base::FilePath& profile_dir) {
-+  const base::FilePath exe_path = exe_dir.Append(kSidecarExecutableName);
++  const base::FilePath exe_path =
++      exe_dir.Append(base::FilePath::FromUTF8Unsafe(kSidecarExecutableName));
 +  if (!base::PathExists(exe_path)) {
 +    LOG(WARNING) << "EDI sidecar not found at " << exe_path.value()
 +                 << "; the browser will start without the built-in MCP server.";
@@ -124,9 +125,12 @@
 +    return nullptr;
 +  }
 +
-+  return std::make_unique<McpSidecarLauncher>(std::move(process),
-+                                              std::move(exe_path),
-+                                              profile_dir);
++  // `new` directly (rather than std::make_unique) because the constructor is
++  // private: the `new` expression inside make_unique would be access-checked
++  // in the std context, where the constructor is not visible.
++  return std::unique_ptr<McpSidecarLauncher>(
++      new McpSidecarLauncher(std::move(process), std::move(exe_path),
++                             profile_dir));
 +}
 +
 +McpSidecarLauncher::McpSidecarLauncher(base::Process process,
