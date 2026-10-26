@@ -117,3 +117,4 @@ extra/ungoogled-chromium/add-flag-to-hide-window-buttons.patch
 extra/ungoogled-chromium/rename-brand-to-edi.patch
 extra/ungoogled-chromium/remove-webstore-ntp-tile.patch
 extra/ungoogled-chromium/add-edi-status-page.patch
+extra/ungoogled-chromium/hide-automation-state.patch
