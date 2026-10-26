@@ -1,0 +1,489 @@
+diff --git a/third_party/blink/public/devtools_protocol/domains/Edi.pdl b/third_party/blink/public/devtools_protocol/domains/Edi.pdl
+new file mode 100644
+index 0000000000..a05fe7e033
+--- /dev/null
++++ b/third_party/blink/public/devtools_protocol/domains/Edi.pdl
+@@ -0,0 +1,75 @@
++# Copyright (c) 2026 Wellington Moreno. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# The Edi domain exposes EDI browser-specific operations to CDP clients:
++# tab group management and display-only tab title prefixes. It is used by
++# the built-in MCP sidecar to give the agent its own labeled group of tabs
++# inside the user's browser window.
++domain Edi
++  # Information about a tab group.
++  type TabGroupInfo extends object
++    properties
++      # The unique identifier of the group.
++      string id
++      # The group title.
++      string title
++      # The group color id.
++      integer color
++      # The CDP target ids of the tabs currently in the group.
++      array of string tabIds
++
++  # Attaches the tab |targetId| to a tab group. When |groupId| is empty or
++  # does not name an existing group, a new group is created with |title|
++  # and |color| (a new group always contains at least |targetId|). Returns
++  # the id of the group the tab was attached to.
++  command attachTabToGroup
++    parameters
++      # The CDP target id of the tab.
++      string targetId
++      # The id of an existing group, or empty to create a new one.
++      optional string groupId
++      # The group title; used when a new group is created.
++      string title
++      # The group color id; used when a new group is created.
++      integer color
++    returns
++      # The id of the group the tab was attached to.
++      string groupId
++
++  # Detaches the tab |targetId| from its group; the tab is kept.
++  command detachTabFromGroup
++    parameters
++      # The CDP target id of the tab.
++      string targetId
++
++  # Renames and recolors the existing group |groupId|.
++  command updateTabGroup
++    parameters
++      # The id of the group.
++      string groupId
++      # The new group title.
++      string title
++      # The new group color id.
++      integer color
++
++  # Sets a display-only title prefix on the tab |targetId|; an empty prefix
++  # clears it. The document title is not modified.
++  command setTabTitlePrefix
++    parameters
++      # The CDP target id of the tab.
++      string targetId
++      # The prefix to display before the tab title.
++      string prefix
++
++  # Returns all tab groups with their current members.
++  command getTabGroups
++    returns
++      # The tab groups of all current browser windows.
++      array of TabGroupInfo groups
++
++  # Removes the group |groupId|; its tabs are kept, ungrouped.
++  command closeTabGroup
++    parameters
++      # The id of the group to remove.
++      string groupId
+diff --git a/third_party/blink/public/devtools_protocol/browser_protocol.pdl b/third_party/blink/public/devtools_protocol/browser_protocol.pdl
+index 6545483183..bda3b73f9f 100644
+--- a/third_party/blink/public/devtools_protocol/browser_protocol.pdl
++++ b/third_party/blink/public/devtools_protocol/browser_protocol.pdl
+@@ -27,6 +27,7 @@ include domains/DOMStorage.pdl
+ include domains/DeviceAccess.pdl
+ include domains/DeviceOrientation.pdl
+ include domains/DigitalCredentials.pdl
++include domains/Edi.pdl
+ include domains/Emulation.pdl
+ include domains/EventBreakpoints.pdl
+ include domains/Extensions.pdl
+diff --git a/third_party/blink/public/devtools_protocol/BUILD.gn b/third_party/blink/public/devtools_protocol/BUILD.gn
+index 4a061691cb..062733cad7 100644
+--- a/third_party/blink/public/devtools_protocol/BUILD.gn
++++ b/third_party/blink/public/devtools_protocol/BUILD.gn
+@@ -25,6 +25,7 @@ domains = [
+   "domains/DeviceAccess.pdl",
+   "domains/DeviceOrientation.pdl",
+   "domains/DigitalCredentials.pdl",
++  "domains/Edi.pdl",
+   "domains/Emulation.pdl",
+   "domains/EventBreakpoints.pdl",
+   "domains/Extensions.pdl",
+diff --git a/chrome/browser/devtools/inspector_protocol_config.json b/chrome/browser/devtools/inspector_protocol_config.json
+index c972f74e20..d00ac46b18 100644
+--- a/chrome/browser/devtools/inspector_protocol_config.json
++++ b/chrome/browser/devtools/inspector_protocol_config.json
+@@ -26,6 +26,9 @@
+                 "include": [ "setRemoteLocations", "createTarget" ],
+                 "include_events": []
+             },
++            {
++                "domain": "Edi"
++            },
+             {
+                 "domain": "Cast",
+                 "async": ["startDesktopMirroring", "startTabMirroring"]
+diff --git a/chrome/browser/devtools/protocol/edi_handler.h b/chrome/browser/devtools/protocol/edi_handler.h
+new file mode 100644
+index 0000000000..cc7c8378ae
+--- /dev/null
++++ b/chrome/browser/devtools/protocol/edi_handler.h
+@@ -0,0 +1,49 @@
++// Copyright (c) 2026 Wellington Moreno. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Browser-level handler for the EDI CDP domain: tab group operations and
++// display-only tab title prefixes, used by the built-in MCP sidecar.
++//
++// All methods operate on the TabStripModels of the current browser windows
++// and must be called on the browser process UI thread.
++
++#ifndef CHROME_BROWSER_DEVTOOLS_PROTOCOL_EDIT_HANDLER_H_
++#define CHROME_BROWSER_DEVTOOLS_PROTOCOL_EDIT_HANDLER_H_
++
++#include <memory>
++#include <optional>
++#include <string>
++
++#include "chrome/browser/devtools/protocol/edi.h"
++
++class EdiHandler : public protocol::Edi::Backend {
++ public:
++  explicit EdiHandler(protocol::UberDispatcher* dispatcher);
++
++  EdiHandler(const EdiHandler&) = delete;
++  EdiHandler& operator=(const EdiHandler&) = delete;
++
++  ~EdiHandler() override;
++
++  // protocol::Edi::Backend:
++  protocol::Response AttachTabToGroup(
++      const std::string& in_target_id,
++      std::optional<std::string> in_group_id,
++      const std::string& in_title,
++      int in_color,
++      std::string* out_group_id) override;
++  protocol::Response DetachTabFromGroup(
++      const std::string& in_target_id) override;
++  protocol::Response UpdateTabGroup(const std::string& in_group_id,
++                                    const std::string& in_title,
++                                    int in_color) override;
++  protocol::Response SetTabTitlePrefix(const std::string& in_target_id,
++                                       const std::string& in_prefix) override;
++  protocol::Response GetTabGroups(
++      std::unique_ptr<protocol::Array<protocol::Edi::TabGroupInfo>>*
++          out_groups) override;
++  protocol::Response CloseTabGroup(const std::string& in_group_id) override;
++};
++
++#endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_EDIT_HANDLER_H_
+diff --git a/chrome/browser/devtools/protocol/edi_handler.cc b/chrome/browser/devtools/protocol/edi_handler.cc
+new file mode 100644
+index 0000000000..79c17c1e7f
+--- /dev/null
++++ b/chrome/browser/devtools/protocol/edi_handler.cc
+@@ -0,0 +1,245 @@
++// Copyright (c) 2026 Wellington Moreno. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/devtools/protocol/edi_handler.h"
++
++#include <algorithm>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/edi/edi_tab_title_prefix.h"
++#include "chrome/browser/ui/browser_ui_controller/browser_ui_controller.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/tabs/tab_change_type.h"
++#include "chrome/browser/ui/tabs/tab_group.h"
++#include "chrome/browser/ui/tabs/tab_group_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/tab_groups/tab_group_color.h"
++#include "components/tab_groups/tab_group_visual_data.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/devtools_agent_host.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/gfx/geometry/range.h"
++
++namespace {
++
++// Resolves the CDP target id to the tab that owns it, if any.
++tabs::TabInterface* FindTabForTargetId(const std::string& target_id) {
++  content::DevToolsAgentHost* host =
++      content::DevToolsAgentHost::GetForId(target_id).get();
++  if (!host) {
++    return nullptr;
++  }
++  content::WebContents* web_contents = host->GetWebContents();
++  if (!web_contents) {
++    return nullptr;
++  }
++  return tabs::TabInterface::MaybeGetFromContents(web_contents);
++}
++
++// The CDP target id of the tab, creating the agent host if needed.
++std::string TargetIdForTab(tabs::TabInterface* tab) {
++  return content::DevToolsAgentHost::GetOrCreateForTab(tab->GetContents())
++      ->GetId();
++}
++
++// The group with |group_id| in |model|, if any.
++tab_groups::TabGroupId FindGroup(TabStripModel* model,
++                                 const std::string& group_id) {
++  for (const tab_groups::TabGroupId& id :
++       model->group_model()->ListTabGroups()) {
++    if (id.ToString() == group_id) {
++      return id;
++    }
++  }
++  return tab_groups::TabGroupId();  // Invalid.
++}
++
++// The TabStripModel owning the group with |group_id|, across all current
++// windows (or nullptr if no window has it).
++TabStripModel* FindModelForGroup(const std::string& group_id,
++                                 tab_groups::TabGroupId* out_group) {
++  TabStripModel* found_model = nullptr;
++  tab_groups::TabGroupId found_group;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        TabStripModel* model = window->GetTabStripModel();
++        if (!model) {
++          return true;
++        }
++        for (const tab_groups::TabGroupId& id :
++             model->group_model()->ListTabGroups()) {
++          if (id.ToString() == group_id) {
++            found_model = model;
++            found_group = id;
++            return false;
++          }
++        }
++        return true;
++      });
++  if (found_model) {
++    *out_group = found_group;
++  }
++  return found_model;
++}
++
++int ClampColor(int color) {
++  return std::clamp(color, 0,
++                    static_cast<int>(tab_groups::TabGroupColorId::kNumEntries) -
++                        1);
++}
++
++}  // namespace
++
++EdiHandler::EdiHandler(protocol::UberDispatcher* dispatcher) {
++  dispatcher->wire(this);
++}
++
++EdiHandler::~EdiHandler() = default;
++
++protocol::Response EdiHandler::AttachTabToGroup(
++    const std::string& in_target_id,
++    std::optional<std::string> in_group_id,
++    const std::string& in_title,
++    int in_color,
++    std::string* out_group_id) {
++  tabs::TabInterface* tab = FindTabForTargetId(in_target_id);
++  if (!tab) {
++    return protocol::Response::InvalidRequest(
++        "no tab for the given target id");
++  }
++  BrowserWindowInterface* window = tab->GetBrowserWindowInterface();
++  TabStripModel* model = window ? window->GetTabStripModel() : nullptr;
++  if (!model) {
++    return protocol::Response::InvalidRequest("tab has no tab strip model");
++  }
++  const int index = model->GetIndexOfTab(tab);
++
++  tab_groups::TabGroupId group_id;
++  const bool existing =
++      in_group_id.has_value() && !in_group_id->empty() &&
++      (group_id = FindGroup(model, *in_group_id)) != tab_groups::TabGroupId();
++  if (existing) {
++    model->AddToExistingGroup({index}, group_id);
++  } else {
++    // A new group always contains at least this tab.
++    group_id = model->AddToNewGroup({index});
++    model->ChangeTabGroupVisuals(
++        group_id,
++        tab_groups::TabGroupVisualData(base::UTF8UnsafeToUTF16(in_title),
++                                       static_cast<tab_groups::TabGroupColorId>(
++                                           ClampColor(in_color))),
++        /*is_customized=*/true);
++  }
++  *out_group_id = group_id.ToString();
++  return protocol::Response::Success();
++}
++
++protocol::Response EdiHandler::DetachTabFromGroup(
++    const std::string& in_target_id) {
++  tabs::TabInterface* tab = FindTabForTargetId(in_target_id);
++  if (!tab) {
++    return protocol::Response::InvalidRequest(
++        "no tab for the given target id");
++  }
++  BrowserWindowInterface* window = tab->GetBrowserWindowInterface();
++  TabStripModel* model = window ? window->GetTabStripModel() : nullptr;
++  if (!model) {
++    return protocol::Response::Success();  // Nothing to detach.
++  }
++  model->RemoveFromGroup({model->GetIndexOfTab(tab)});
++  return protocol::Response::Success();
++}
++
++protocol::Response EdiHandler::UpdateTabGroup(const std::string& in_group_id,
++                                              const std::string& in_title,
++                                              int in_color) {
++  tab_groups::TabGroupId group_id;
++  TabStripModel* model =
++      FindModelForGroup(in_group_id, &group_id);
++  if (!model) {
++    return protocol::Response::InvalidRequest("no such group");
++  }
++  model->ChangeTabGroupVisuals(
++      group_id,
++      tab_groups::TabGroupVisualData(base::UTF8UnsafeToUTF16(in_title),
++                                     static_cast<tab_groups::TabGroupColorId>(
++                                         ClampColor(in_color))),
++      /*is_customized=*/true);
++  return protocol::Response::Success();
++}
++
++protocol::Response EdiHandler::SetTabTitlePrefix(
++    const std::string& in_target_id, const std::string& in_prefix) {
++  tabs::TabInterface* tab = FindTabForTargetId(in_target_id);
++  if (!tab) {
++    return protocol::Response::InvalidRequest(
++        "no tab for the given target id");
++  }
++  EdiTabTitlePrefix* prefix = EdiTabTitlePrefix::From(tab);
++  prefix->SetPrefix(base::UTF8UnsafeToUTF16(in_prefix));
++  // Refresh the tab strip display; the document title is untouched.
++  BrowserUiController::NotifyTabUIChanged(tab, TabChangeType::kAll);
++  return protocol::Response::Success();
++}
++
++protocol::Response EdiHandler::GetTabGroups(
++    std::unique_ptr<protocol::Array<protocol::Edi::TabGroupInfo>>*
++        out_groups) {
++  auto groups = std::make_unique<protocol::Array<protocol::Edi::TabGroupInfo>>();
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [&](BrowserWindowInterface* window) {
++        TabStripModel* model = window->GetTabStripModel();
++        if (!model) {
++          return true;
++        }
++        for (const tab_groups::TabGroupId& id :
++             model->group_model()->ListTabGroups()) {
++          tab_groups::TabGroup* group = model->group_model()->GetTabGroup(id);
++          if (!group) {
++            continue;
++          }
++          protocol::Edi::TabGroupInfo info;
++          info.id = id.ToString();
++          if (const tab_groups::TabGroupVisualData* visuals =
++                  group->visual_data()) {
++            info.title = base::UTF16ToUTF8(visuals->title());
++            info.color = static_cast<int>(visuals->color());
++          }
++          const gfx::Range tab_range = group->ListTabs();
++          for (int i = tab_range.start(); i < tab_range.end(); ++i) {
++            if (tabs::TabInterface* tab = model->GetTabAtIndex(i)) {
++              info.tabIds.push_back(TargetIdForTab(tab));
++            }
++          }
++          groups->push_back(std::move(info));
++        }
++        return true;
++      });
++  *out_groups = std::move(groups);
++  return protocol::Response::Success();
++}
++
++protocol::Response EdiHandler::CloseTabGroup(const std::string& in_group_id) {
++  tab_groups::TabGroupId group_id;
++  TabStripModel* model = FindModelForGroup(in_group_id, &group_id);
++  if (!model) {
++    return protocol::Response::Success();  // Already gone.
++  }
++  tab_groups::TabGroup* group = model->group_model()->GetTabGroup(group_id);
++  if (!group) {
++    return protocol::Response::Success();
++  }
++  // Ungroup every member; the tabs themselves are kept.
++  std::vector<int> indices;
++  const gfx::Range tab_range = group->ListTabs();
++  for (int i = tab_range.start(); i < tab_range.end(); ++i) {
++    indices.push_back(i);
++  }
++  model->RemoveFromGroup(indices);
++  return protocol::Response::Success();
++}
+diff --git a/chrome/browser/devtools/chrome_devtools_session.h b/chrome/browser/devtools/chrome_devtools_session.h
+index f703912a1b..3f2180a719 100644
+--- a/chrome/browser/devtools/chrome_devtools_session.h
++++ b/chrome/browser/devtools/chrome_devtools_session.h
+@@ -19,6 +19,7 @@ class AutofillHandler;
+ class EmulationHandler;
+ class BrowserHandler;
+ class CastHandler;
++class EdiHandler;
+ class ExtensionsHandler;
+ class PageHandler;
+ class PWAHandler;
+@@ -47,6 +48,7 @@ class ChromeDevToolsSession : public ChromeDevToolsSessionBase {
+   std::unique_ptr<ExtensionsHandler> extensions_handler_;
+   std::unique_ptr<BrowserHandler> browser_handler_;
+   std::unique_ptr<CastHandler> cast_handler_;
++  std::unique_ptr<EdiHandler> edi_handler_;
+   std::unique_ptr<EmulationHandler> emulation_handler_;
+   std::unique_ptr<PageHandler> page_handler_;
+   std::unique_ptr<PWAHandler> pwa_handler_;
+diff --git a/chrome/browser/devtools/chrome_devtools_session.cc b/chrome/browser/devtools/chrome_devtools_session.cc
+index 545f65e3..8f69ae30 100644
+--- a/chrome/browser/devtools/chrome_devtools_session.cc
++++ b/chrome/browser/devtools/chrome_devtools_session.cc
+@@ -17,6 +17,7 @@
+ #include "chrome/browser/devtools/protocol/autofill_handler.h"
+ #include "chrome/browser/devtools/protocol/browser_handler.h"
+ #include "chrome/browser/devtools/protocol/cast_handler.h"
++#include "chrome/browser/devtools/protocol/edi_handler.h"
+ #include "chrome/browser/devtools/protocol/emulation_handler.h"
+ #include "chrome/browser/devtools/protocol/extensions_handler.h"
+ #include "chrome/browser/devtools/protocol/page_handler.h"
+@@ -117,6 +117,9 @@
+     browser_handler_ =
+         std::make_unique<BrowserHandler>(dispatcher(), agent_host->GetId());
+   }
++  if (channel->GetClient()->IsTrusted()) {
++    edi_handler_ = std::make_unique<EdiHandler>(dispatcher());
++  }
+   if (IsDomainAvailableToUntrustedClient<SystemInfoHandler>() ||
+       channel->GetClient()->IsTrusted()) {
+     system_info_handler_ = std::make_unique<SystemInfoHandler>(dispatcher());
+diff --git a/chrome/browser/devtools/BUILD.gn b/chrome/browser/devtools/BUILD.gn
+index 2fa8d5a4..8dc6c479 100644
+--- a/chrome/browser/devtools/BUILD.gn
++++ b/chrome/browser/devtools/BUILD.gn
+@@ -33,6 +33,8 @@
+     "protocol/extensions.h",
+     "protocol/cast.cc",
+     "protocol/cast.h",
++    "protocol/edi.cc",
++    "protocol/edi.h",
+     "protocol/emulation.cc",
+     "protocol/emulation.h",
+     "protocol/page.cc",
+@@ -467,6 +467,8 @@
+       "protocol/browser_handler.h",
+       "protocol/cast_handler.cc",
+       "protocol/cast_handler.h",
++      "protocol/edi_handler.cc",
++      "protocol/edi_handler.h",
+       "protocol/emulation_handler.cc",
+       "protocol/emulation_handler.h",
+       "protocol/extensions_handler.cc",

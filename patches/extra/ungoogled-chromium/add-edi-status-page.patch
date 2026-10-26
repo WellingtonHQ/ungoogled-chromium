@@ -12,10 +12,10 @@ index 2525974..82a5ee4 100644
      }
 diff --git a/chrome/browser/edi/edi_status_ui.h b/chrome/browser/edi/edi_status_ui.h
 new file mode 100644
-index 0000000..28b3094
+index 0000000..df1f42b0 100644
 --- /dev/null
 +++ b/chrome/browser/edi/edi_status_ui.h
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,336 @@
 +// Copyright (c) 2026 Wellington Moreno. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -97,7 +97,7 @@ index 0000000..28b3094
 +std::string FormatUptime(base::TimeDelta uptime) {
 +  const int64_t secs = uptime.InSeconds();
 +  if (secs <= 0) {
-+    return "ΓÇö";
++    return "—";
 +  }
 +  const int hours = static_cast<int>(secs / 3600);
 +  const int minutes = static_cast<int>((secs % 3600) / 60);
@@ -147,6 +147,9 @@ index 0000000..28b3094
 +               dict.FindInt("requests_in_flight").value_or(0));
 +    status.Set("started_at_unix_secs",
 +               dict.FindInt("started_at_unix_secs").value_or(0));
++    if (const base::DictValue* agent_group = dict.FindDict("agent_group")) {
++      status.Set("agent_group", agent_group->Clone());
++    }
 +  }
 +  root.Set("status", std::move(status));
 +
@@ -179,6 +182,8 @@ index 0000000..28b3094
 +  int requests_total = 0;
 +  int requests_in_flight = 0;
 +  int64_t started_at_unix_secs = 0;
++  std::string agent_group_name;
++  int agent_group_tab_count = 0;
 +  if (const std::optional<base::DictValue> status_file =
 +          ReadMcpJsonFile(profile_dir, L"status.json")) {
 +    const base::DictValue& dict = *status_file;
@@ -186,6 +191,10 @@ index 0000000..28b3094
 +    requests_total = dict.FindInt("requests_total").value_or(0);
 +    requests_in_flight = dict.FindInt("requests_in_flight").value_or(0);
 +    started_at_unix_secs = dict.FindInt("started_at_unix_secs").value_or(0);
++    if (const base::DictValue* agent_group = dict.FindDict("agent_group")) {
++      agent_group_name = agent_group->FindString("name").value_or("");
++      agent_group_tab_count = agent_group->FindInt("tab_count").value_or(0);
++    }
 +  }
 +
 +  base::TimeDelta uptime;
@@ -203,10 +212,17 @@ index 0000000..28b3094
 +  const char* token_text = token_present ? "Present" : "Missing";
 +  const char* token_dot = token_present ? "ok" : "bad";
 +  const std::string endpoint_text =
-+      endpoint.empty() ? "ΓÇö" : HtmlEscape(endpoint);
++      endpoint.empty() ? "—" : HtmlEscape(endpoint);
 +  const std::string profile_text = profile_dir.empty()
-+                                       ? "ΓÇö"
++                                       ? "—"
 +                                       : HtmlEscape(profile_dir.AsUTF8Unsafe());
++  const std::string agent_group_text = agent_group_name.empty()
++                                           ? "—"
++                                           : HtmlEscape(agent_group_name) +
++                                                 " · " +
++                                                 base::NumberToString(
++                                                     agent_group_tab_count) +
++                                                 " tabs";
 +
 +  auto pill = [](const char* text, const char* cls) {
 +    return std::string("<span class=\"pill ") + cls + "\">" + text + "</span>";
@@ -220,7 +236,7 @@ index 0000000..28b3094
 +  };
 +
 +  std::string html = R"(
-+<title>EDI ΓÇö MCP sidecar status</title>
++<title>EDI — MCP sidecar status</title>
 +<meta charset="utf-8">
 +<meta http-equiv="refresh" content="2">
 +<meta name="color-scheme" content="light dark">
@@ -266,20 +282,21 @@ index 0000000..28b3094
 +</style>
 +<div class="page">
 + <h1>EDI</h1>
-+ <p class="subtitle">Built-in MCP sidecar status ΓÇö refreshes every 2 seconds.</p>
++ <p class="subtitle">Built-in MCP sidecar status — refreshes every 2 seconds.</p>
 + <div class="grid">
 +)";
 +  html += tile("Sidecar", pill(sidecar_text, sidecar_dot));
 +  html += tile("CDP attached", pill(cdp_text, cdp_dot));
 +  html += tile("MCP endpoint", code_value(endpoint_text));
 +  html += tile("Auth token", pill(token_text, token_dot));
++  html += tile("Agent group", agent_group_text);
 +  html += tile("Requests in flight", base::NumberToString(requests_in_flight));
 +  html += tile("Total requests", base::NumberToString(requests_total));
 +  html += tile("Uptime", FormatUptime(uptime));
 +  html += tile("Profile directory", code_value(profile_text));
 +  html += R"(
 + </div>
-+ <p class="footer"><a href="chrome://settings/onStartup">Change the on-startup page</a> ┬╖
++ <p class="footer"><a href="chrome://settings/onStartup">Change the on-startup page</a> ·
 +    <a href="chrome://version">About EDI</a></p>
 +</div>
 +)";

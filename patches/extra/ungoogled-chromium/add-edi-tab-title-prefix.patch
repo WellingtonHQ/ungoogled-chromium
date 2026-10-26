@@ -1,0 +1,155 @@
+diff --git a/chrome/browser/edi/BUILD.gn b/chrome/browser/edi/BUILD.gn
+new file mode 100644
+index 0000000000..bcf6a71122
+--- /dev/null
++++ b/chrome/browser/edi/BUILD.gn
+@@ -0,0 +1,13 @@
++# Copyright (c) 2026 Wellington Moreno. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++source_set("edi_tab_title_prefix") {
++  sources = [ "edi_tab_title_prefix.cc" ]
++  public = [ "edi_tab_title_prefix.h" ]
++  deps = [
++    "//base",
++    "//components/tabs:public",
++    "//ui/base/unowned_user_data",
++  ]
++}
+diff --git a/chrome/browser/edi/edi_tab_title_prefix.h b/chrome/browser/edi/edi_tab_title_prefix.h
+new file mode 100644
+index 0000000000..6bd62b07fc
+--- /dev/null
++++ b/chrome/browser/edi/edi_tab_title_prefix.h
+@@ -0,0 +1,44 @@
++// Copyright (c) 2026 Wellington Moreno. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// A display-only title prefix for agent-owned tabs, stored as unowned user
++// data on the tab. The prefix is prepended to the title the tab strip
++// shows; the underlying document title is untouched.
++
++#ifndef CHROME_BROWSER_EDI_EDIT_TAB_TITLE_PREFIX_H_
++#define CHROME_BROWSER_EDI_EDIT_TAB_TITLE_PREFIX_H_
++
++#include <string>
++
++#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++
++namespace tabs {
++class TabInterface;
++}
++
++class EdiTabTitlePrefix {
++ public:
++  DECLARE_USER_DATA(EdiTabTitlePrefix);
++
++  explicit EdiTabTitlePrefix(tabs::TabInterface& tab);
++  ~EdiTabTitlePrefix() = default;
++
++  EdiTabTitlePrefix(const EdiTabTitlePrefix&) = delete;
++  EdiTabTitlePrefix& operator=(const EdiTabTitlePrefix&) = delete;
++
++  // The prefix for |tab|, creating it if needed. |tab| must be non-null.
++  static EdiTabTitlePrefix* From(tabs::TabInterface* tab);
++
++  // Sets the display prefix; an empty prefix clears it.
++  void SetPrefix(const std::u16string& prefix);
++
++  // The current display prefix (empty if none).
++  const std::u16string& prefix() const { return prefix_; }
++
++ private:
++  std::u16string prefix_;
++  ui::ScopedUnownedUserData<EdiTabTitlePrefix> scoped_unowned_user_data_;
++};
++
++#endif  // CHROME_BROWSER_EDI_EDIT_TAB_TITLE_PREFIX_H_
+diff --git a/chrome/browser/edi/edi_tab_title_prefix.cc b/chrome/browser/edi/edi_tab_title_prefix.cc
+new file mode 100644
+index 0000000000..d4b2493960
+--- /dev/null
++++ b/chrome/browser/edi/edi_tab_title_prefix.cc
+@@ -0,0 +1,25 @@
++// Copyright (c) 2026 Wellington Moreno. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/edi/edi_tab_title_prefix.h"
++
++#include "base/check.h"
++#include "components/tabs/public/tab_interface.h"
++
++EdiTabTitlePrefix::EdiTabTitlePrefix(tabs::TabInterface& tab)
++    : scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {}
++
++// static
++EdiTabTitlePrefix* EdiTabTitlePrefix::From(tabs::TabInterface* tab) {
++  DCHECK(tab);
++  if (EdiTabTitlePrefix* existing =
++          Get(tab->GetUnownedUserDataHost())) {
++    return existing;
++  }
++  return new EdiTabTitlePrefix(*tab);
++}
++
++void EdiTabTitlePrefix::SetPrefix(const std::u16string& prefix) {
++  prefix_ = prefix;
++}
+diff --git a/chrome/browser/ui/tab_ui_helper.cc b/chrome/browser/ui/tab_ui_helper.cc
+index f469749b3f..389d64e179 100644
+--- a/chrome/browser/ui/tab_ui_helper.cc
++++ b/chrome/browser/ui/tab_ui_helper.cc
+@@ -14,6 +14,7 @@
+ #include "base/functional/callback_forward.h"
+ #include "base/process/kill.h"
+ #include "build/build_config.h"
++#include "chrome/browser/edi/edi_tab_title_prefix.h"
+ #include "chrome/browser/favicon/favicon_utils.h"
+ #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
+ #include "chrome/browser/sessions/session_restore.h"
+@@ -136,16 +137,23 @@ std::u16string TabUIHelper::GetTitle() const {
+     }
+   }
+ 
+-  const std::u16string& contents_title = web_contents()->GetTitle();
+-  if (!contents_title.empty()) {
+-    return contents_title;
+-  }
+-
++  std::u16string title = web_contents()->GetTitle();
++  if (title.empty()) {
+ #if BUILDFLAG(IS_MAC)
+-  return l10n_util::GetStringUTF16(IDS_BROWSER_WINDOW_MAC_TAB_UNTITLED);
++    title = l10n_util::GetStringUTF16(IDS_BROWSER_WINDOW_MAC_TAB_UNTITLED);
+ #else
+-  return std::u16string();
++    title = std::u16string();
+ #endif
++  }
++
++  // EDI: display-only prefix for agent-owned tabs; the document title is
++  // untouched.
++  if (const EdiTabTitlePrefix* edi_prefix = EdiTabTitlePrefix::From(&tab())) {
++    if (!edi_prefix->prefix().empty()) {
++      title.insert(0, edi_prefix->prefix());
++    }
++  }
++  return title;
+ }
+ 
+ bool TabUIHelper::ShouldRenderLoadingTitle() {
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index aa878b69..1a751c18 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -205,6 +205,7 @@
+     ]
+     deps = [
+       "//chrome/app:generated_resources",
++      "//chrome/browser/edi:edi_tab_title_prefix",
+       "//chrome/browser/favicon",
+       "//chrome/browser/resource_coordinator:mojo_bindings",
+       "//chrome/browser/sessions",

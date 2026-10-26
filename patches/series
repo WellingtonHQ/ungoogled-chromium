@@ -117,5 +117,8 @@ extra/ungoogled-chromium/add-flag-to-hide-window-buttons.patch
 extra/ungoogled-chromium/rename-brand-to-edi.patch
 extra/ungoogled-chromium/remove-webstore-ntp-tile.patch
 extra/ungoogled-chromium/add-edi-status-page.patch
+extra/ungoogled-chromium/add-edi-tab-title-prefix.patch
+extra/ungoogled-chromium/add-edi-cdp-domain.patch
 extra/ungoogled-chromium/hide-automation-state.patch
 extra/ungoogled-chromium/install-edi-sidecar.patch
+extra/ungoogled-chromium/enable-password-saving-by-default.patch
