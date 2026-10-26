@@ -1,0 +1,31 @@
+diff --git a/chrome/installer/setup/install_worker.cc b/chrome/installer/setup/install_worker.cc
+index 1a930947cc..53918aef8f 100644
+--- a/chrome/installer/setup/install_worker.cc
++++ b/chrome/installer/setup/install_worker.cc
+@@ -343,6 +343,14 @@ void AddChromeWorkItems(const InstallParams& install_params,
+           WorkItem::MoveTreeOptions{.lenient_deletion = true})),
+       /*else_item=*/std::move(not_in_use_list)));
+ 
++  // Move the EDI MCP sidecar into the install root. It is staged next to
++  // chrome.exe (outside the version directory), so it needs its own item.
++  // Allow items in `src_path` to be left behind. It is in a temporary
++  // directory that will eventually be cleaned up.
++  install_list->AddMoveTreeWorkItem(
++      src_path.Append(installer::kEdiExe), target_path.Append(installer::kEdiExe),
++      temp_path, WorkItem::MoveTreeOptions{.lenient_deletion = true});
++
+   // Update the version key now that chrome.exe or new_chrome.exe is in place.
+   AddVersionKeyWorkItems(install_params, install_list);
+ 
+diff --git a/chrome/installer/util/util_constants.h b/chrome/installer/util/util_constants.h
+index db44d24ec0..a3fe4d5785 100644
+--- a/chrome/installer/util/util_constants.h
++++ b/chrome/installer/util/util_constants.h
+@@ -385,6 +385,7 @@ inline constexpr wchar_t kChromeOldExe[] = L"old_chrome.exe";
+ inline constexpr wchar_t kChromeProxyExe[] = L"chrome_proxy.exe";
+ inline constexpr wchar_t kChromeProxyNewExe[] = L"new_chrome_proxy.exe";
+ inline constexpr wchar_t kChromeProxyOldExe[] = L"old_chrome_proxy.exe";
++inline constexpr wchar_t kEdiExe[] = L"edi.exe";
+ inline constexpr wchar_t kCmdRenameChromeExe[] = L"cmd";
+ inline constexpr wchar_t kCmdOnOsUpgrade[] = L"on-os-upgrade";
+ inline constexpr wchar_t kCmdRotateDeviceTrustKey[] = L"rotate-dtkey";
