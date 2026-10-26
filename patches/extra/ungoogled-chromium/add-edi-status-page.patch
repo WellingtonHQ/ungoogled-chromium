@@ -1,0 +1,485 @@
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+index 2525974..82a5ee4 100644
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -1332,6 +1332,7 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
+   if (first_run::IsChromeFirstRun()) {
+     if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kApp) &&
+         !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppId)) {
++      browser_creator_->AddFirstRunTabs({GURL("chrome://edi")});
+       browser_creator_->AddFirstRunTabs({GURL("chrome://ungoogled-first-run")});
+       browser_creator_->AddFirstRunTabs(master_prefs_->new_tabs);
+     }
+diff --git a/chrome/browser/edi/edi_status_ui.h b/chrome/browser/edi/edi_status_ui.h
+new file mode 100644
+index 0000000..28b3094
+--- /dev/null
++++ b/chrome/browser/edi/edi_status_ui.h
+@@ -0,0 +1,319 @@
++// Copyright (c) 2026 Wellington Moreno. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// Implements the chrome://edi status page: a live dashboard of the built-in
++// MCP sidecar. The page is served from a header-only URLDataSource (in the
++// style of ungoogled_first_run.h):
++//
++//   chrome://edi/             -> a self-contained HTML dashboard
++//   chrome://edi/status.json  -> the live status document
++//
++// The status document is assembled at request time from the sidecar
++// launcher's process state and the JSON files the sidecar publishes under
++// the profile's mcp/ directory (runtime.json, token, status.json).
++//
++// The dashboard is rendered server-side: the current values are baked into
++// the HTML on every request, and the page refreshes itself with a meta tag.
++// (Client-side fetch() of chrome:// URLs is blocked in this Chromium.)
++
++#ifndef CHROME_BROWSER_EDI_EDIT_STATUS_UI_H_
++#define CHROME_BROWSER_EDI_EDIT_STATUS_UI_H_
++
++#include <optional>
++#include <string>
++#include <utility>
++
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/memory/ref_counted_memory.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/time/time.h"
++#include "base/values.h"
++#include "chrome/browser/mcp_sidecar_launcher.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/url_data_source.h"
++#include "content/public/browser/web_ui.h"
++#include "content/public/browser/web_ui_controller.h"
++#include "content/public/browser/webui_config.h"
++#include "url/gurl.h"
++
++namespace {
++
++// Reads a JSON object file from the profile's mcp/ directory. Returns
++// nullopt if the file is missing, unreadable, or not a JSON object.
++std::optional<base::DictValue> ReadMcpJsonFile(const base::FilePath& profile_dir,
++                                               const wchar_t* file_name) {
++  if (profile_dir.empty()) {
++    return std::nullopt;
++  }
++  const base::FilePath path = profile_dir.Append(L"mcp").Append(file_name);
++  std::string contents;
++  if (!base::ReadFileToString(path, &contents)) {
++    return std::nullopt;
++  }
++  return base::JSONReader::ReadDict(contents, base::JSON_PARSE_RFC);
++}
++
++// Escapes the HTML special characters in |text| so it can be embedded in a
++// tag body.
++std::string HtmlEscape(const std::string& text) {
++  std::string out;
++  out.reserve(text.size());
++  for (const char c : text) {
++    switch (c) {
++      case '&': out += "&amp;"; break;
++      case '<': out += "&lt;"; break;
++      case '>': out += "&gt;"; break;
++      case '"': out += "&quot;"; break;
++      case '\'': out += "&#39;"; break;
++      default: out += c; break;
++    }
++  }
++  return out;
++}
++
++// Formats a duration as "2h 3m 4s", omitting zero units.
++std::string FormatUptime(base::TimeDelta uptime) {
++  const int64_t secs = uptime.InSeconds();
++  if (secs <= 0) {
++    return "ΓÇö";
++  }
++  const int hours = static_cast<int>(secs / 3600);
++  const int minutes = static_cast<int>((secs % 3600) / 60);
++  const int seconds = static_cast<int>(secs % 60);
++  std::string out;
++  if (hours > 0) {
++    out += base::NumberToString(hours) + "h ";
++  }
++  if (minutes > 0) {
++    out += base::NumberToString(minutes) + "m ";
++  }
++  out += base::NumberToString(seconds) + "s";
++  return out;
++}
++
++// Builds the JSON document served at chrome://edi/status.json.
++std::string BuildStatusJson() {
++  McpSidecarLauncher* launcher = McpSidecarLauncher::Get();
++  const base::FilePath profile_dir =
++      launcher ? launcher->profile_dir() : base::FilePath();
++
++  base::DictValue root;
++
++  base::DictValue sidecar;
++  sidecar.Set("launcher_present", launcher != nullptr);
++  sidecar.Set("running", launcher != nullptr && launcher->IsRunning());
++  root.Set("sidecar", std::move(sidecar));
++
++  base::DictValue mcp;
++  if (const std::optional<base::DictValue> runtime =
++          ReadMcpJsonFile(profile_dir, L"runtime.json")) {
++    if (const std::string* url = runtime->FindString("url")) {
++      mcp.Set("url", *url);
++    }
++  }
++  mcp.Set("token_present",
++          base::PathExists(profile_dir.Append(L"mcp").Append(L"token")));
++  root.Set("mcp", std::move(mcp));
++
++  base::DictValue status;
++  if (const std::optional<base::DictValue> status_file =
++          ReadMcpJsonFile(profile_dir, L"status.json")) {
++    const base::DictValue& dict = *status_file;
++    status.Set("cdp_attached", dict.FindBool("cdp_attached").value_or(false));
++    status.Set("requests_total", dict.FindInt("requests_total").value_or(0));
++    status.Set("requests_in_flight",
++               dict.FindInt("requests_in_flight").value_or(0));
++    status.Set("started_at_unix_secs",
++               dict.FindInt("started_at_unix_secs").value_or(0));
++  }
++  root.Set("status", std::move(status));
++
++  root.Set("profile_dir", profile_dir.AsUTF8Unsafe());
++
++  std::optional<std::string> json = base::WriteJson(base::ValueView(root));
++  return json.value_or("{}");
++}
++
++// Builds the dashboard HTML served at chrome://edi/, with the current status
++// values baked in. The page refreshes itself every 2 seconds via a meta tag.
++std::string BuildStatusHtml() {
++  McpSidecarLauncher* launcher = McpSidecarLauncher::Get();
++  const base::FilePath profile_dir =
++      launcher ? launcher->profile_dir() : base::FilePath();
++  const bool launcher_present = launcher != nullptr;
++  const bool running = launcher_present && launcher->IsRunning();
++
++  std::string endpoint;
++  if (const std::optional<base::DictValue> runtime =
++          ReadMcpJsonFile(profile_dir, L"runtime.json")) {
++    if (const std::string* url = runtime->FindString("url")) {
++      endpoint = *url;
++    }
++  }
++  const bool token_present =
++      base::PathExists(profile_dir.Append(L"mcp").Append(L"token"));
++
++  bool cdp_attached = false;
++  int requests_total = 0;
++  int requests_in_flight = 0;
++  int64_t started_at_unix_secs = 0;
++  if (const std::optional<base::DictValue> status_file =
++          ReadMcpJsonFile(profile_dir, L"status.json")) {
++    const base::DictValue& dict = *status_file;
++    cdp_attached = dict.FindBool("cdp_attached").value_or(false);
++    requests_total = dict.FindInt("requests_total").value_or(0);
++    requests_in_flight = dict.FindInt("requests_in_flight").value_or(0);
++    started_at_unix_secs = dict.FindInt("started_at_unix_secs").value_or(0);
++  }
++
++  base::TimeDelta uptime;
++  if (started_at_unix_secs > 0) {
++    uptime = base::Time::Now() -
++             (base::Time::UnixEpoch() + base::Seconds(started_at_unix_secs));
++  }
++
++  const char* sidecar_text = running ? "Running"
++                                     : (launcher_present ? "Stopped"
++                                                          : "Not present");
++  const char* sidecar_dot = running ? "ok" : "bad";
++  const char* cdp_text = cdp_attached ? "Attached" : "Not attached";
++  const char* cdp_dot = cdp_attached ? "ok" : "bad";
++  const char* token_text = token_present ? "Present" : "Missing";
++  const char* token_dot = token_present ? "ok" : "bad";
++  const std::string endpoint_text =
++      endpoint.empty() ? "ΓÇö" : HtmlEscape(endpoint);
++  const std::string profile_text = profile_dir.empty()
++                                       ? "ΓÇö"
++                                       : HtmlEscape(profile_dir.AsUTF8Unsafe());
++
++  auto pill = [](const char* text, const char* cls) {
++    return std::string("<span class=\"pill ") + cls + "\">" + text + "</span>";
++  };
++  auto tile = [](const char* label, const std::string& value) {
++    return std::string("  <div class=\"tile\"><p class=\"label\">") + label +
++           "</p><p class=\"value\">" + value + "</p></div>\n";
++  };
++  auto code_value = [](const std::string& text) {
++    return std::string("<code>") + text + "</code>";
++  };
++
++  std::string html = R"(
++<title>EDI ΓÇö MCP sidecar status</title>
++<meta charset="utf-8">
++<meta http-equiv="refresh" content="2">
++<meta name="color-scheme" content="light dark">
++<style>
++  @import url(chrome://resources/css/text_defaults_md.css);
++  :root{
++   --bg:#f6f8fa; --card:#ffffff; --text:#202124; --muted:#5f6368;
++   --border:#e8eaed; --accent:#1967d2;
++   --ok-bg:#e6f4ea; --ok-text:#188038; --bad-bg:#fce8e6; --bad-text:#d93025;
++   --code-bg:rgba(128 128 128 / .12);
++  }
++  @media(prefers-color-scheme:dark){
++   :root{
++    --bg:#202124; --card:#292a2d; --text:#e8eaed; --muted:#9aa0a6;
++    --border:#3f4042; --accent:#8ab4f8;
++    --ok-bg:rgba(24 128 56 / .18); --ok-text:#81c995;
++    --bad-bg:rgba(217 48 37 / .18); --bad-text:#f28b82;
++    --code-bg:rgba(255 255 255 / .08);
++   }
++  }
++  html{background:var(--bg); color:var(--text); line-height:1.45em}
++  body{margin:0}
++  a{color:var(--accent); text-decoration:none}
++  a:hover{text-decoration:underline}
++  .page{width:34em; margin:3em auto; padding:1.75em 2.25em;
++        background:var(--card); border-top:.25em solid var(--accent);
++        border-radius:.75em;
++        box-shadow:0 1px 2px rgba(60 64 67 / .3), 0 2px 6px 2px rgba(60 64 67 / .15)}
++  h1{margin:0; font-size:1.75em; font-weight:600; letter-spacing:-.01em}
++  .subtitle{color:var(--muted); margin:.3em 0 1.5em; font-size:.95em}
++  .grid{display:grid; grid-template-columns:1fr 1fr; gap:.6em}
++  .tile{background:var(--bg); border:.063em solid var(--border);
++        border-radius:.5em; padding:.9em 1em; min-height:5.4em}
++  .label{color:var(--muted); font-size:.78em; margin:0 0 .45em}
++  .value{margin:0; font-size:1.1em; font-weight:500; word-break:break-word}
++  .value code{background:var(--code-bg); padding:.1em .4em;
++              border-radius:.25em; font-size:.85em; word-break:break-all}
++  .pill{display:inline-block; padding:.18em .75em; border-radius:1em;
++        font-size:.92em; font-weight:500}
++  .pill.ok{background:var(--ok-bg); color:var(--ok-text)}
++  .pill.bad{background:var(--bad-bg); color:var(--bad-text)}
++  .footer{margin:1.5em 0 0; color:var(--muted); font-size:.9em}
++</style>
++<div class="page">
++ <h1>EDI</h1>
++ <p class="subtitle">Built-in MCP sidecar status ΓÇö refreshes every 2 seconds.</p>
++ <div class="grid">
++)";
++  html += tile("Sidecar", pill(sidecar_text, sidecar_dot));
++  html += tile("CDP attached", pill(cdp_text, cdp_dot));
++  html += tile("MCP endpoint", code_value(endpoint_text));
++  html += tile("Auth token", pill(token_text, token_dot));
++  html += tile("Requests in flight", base::NumberToString(requests_in_flight));
++  html += tile("Total requests", base::NumberToString(requests_total));
++  html += tile("Uptime", FormatUptime(uptime));
++  html += tile("Profile directory", code_value(profile_text));
++  html += R"(
++ </div>
++ <p class="footer"><a href="chrome://settings/onStartup">Change the on-startup page</a> ┬╖
++    <a href="chrome://version">About EDI</a></p>
++</div>
++)";
++  return html;
++}
++
++}  // namespace
++
++class EdiStatusDataSource : public content::URLDataSource {
++ public:
++  EdiStatusDataSource() {}
++  EdiStatusDataSource(const EdiStatusDataSource&) = delete;
++  EdiStatusDataSource& operator=(const EdiStatusDataSource&) = delete;
++
++  std::string GetSource() { return "edi"; }
++  std::string GetMimeType(const GURL& url) {
++    // Must be the exact MIME type "text/html": this Chromium classifies any
++    // "text/*" type that is not exactly "text/html" (for example
++    // "text/html; charset=utf-8") as plain text, which renders the page as a
++    // <pre> block. The UTF-8 encoding comes from the <meta charset> tag in
++    // the HTML itself.
++    return url.path() == "/status.json" ? "application/json" : "text/html";
++  }
++
++  void StartDataRequest(const GURL& url,
++                        const content::WebContents::Getter& wc_getter,
++                        GotDataCallback callback) {
++    std::string contents;
++    if (url.path() == "/status.json") {
++      contents = BuildStatusJson();
++    } else {
++      contents = BuildStatusHtml();
++    }
++    std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(
++        std::move(contents)));
++  }
++};
++
++class EdiStatusUI;
++class EdiStatusUIConfig : public content::DefaultWebUIConfig<EdiStatusUI> {
++  public:
++    EdiStatusUIConfig() : DefaultWebUIConfig("chrome", "edi") {}
++};
++
++class EdiStatusUI : public content::WebUIController {
++  public:
++    EdiStatusUI(content::WebUI* web_ui) : content::WebUIController(web_ui) {
++      content::URLDataSource::Add(Profile::FromWebUI(web_ui),
++                                  std::make_unique<EdiStatusDataSource>());
++    }
++    EdiStatusUI(const EdiStatusUI&) = delete;
++    EdiStatusUI& operator=(const EdiStatusUI&) = delete;
++};
++
++#endif  // CHROME_BROWSER_EDI_EDIT_STATUS_UI_H_
+diff --git a/chrome/browser/mcp_sidecar_launcher.cc b/chrome/browser/mcp_sidecar_launcher.cc
+index 8b58b08..7265d9a 100644
+--- a/chrome/browser/mcp_sidecar_launcher.cc
++++ b/chrome/browser/mcp_sidecar_launcher.cc
+@@ -17,6 +17,22 @@ const base::TimeDelta kSuperviseInterval = base::Seconds(2);
+ 
+ }  // namespace
+ 
++McpSidecarLauncher* McpSidecarLauncher::instance_ = nullptr;
++
++// static
++McpSidecarLauncher* McpSidecarLauncher::Get() {
++  return instance_;
++}
++
++bool McpSidecarLauncher::IsRunning() const {
++  if (!process_.IsValid()) {
++    return false;
++  }
++  // Non-blocking: a false return means the sidecar has not exited.
++  int exit_code = 0;
++  return !process_.WaitForExitWithTimeout(base::TimeDelta(), &exit_code);
++}
++
+ std::unique_ptr<McpSidecarLauncher> McpSidecarLauncher::Start(
+     const base::FilePath& exe_dir, const base::FilePath& profile_dir) {
+   const base::FilePath exe_path =
+@@ -37,9 +53,11 @@ std::unique_ptr<McpSidecarLauncher> McpSidecarLauncher::Start(
+   // `new` directly (rather than std::make_unique) because the constructor is
+   // private: the `new` expression inside make_unique would be access-checked
+   // in the std context, where the constructor is not visible.
+-  return std::unique_ptr<McpSidecarLauncher>(
++  std::unique_ptr<McpSidecarLauncher> launcher(
+       new McpSidecarLauncher(std::move(process), std::move(exe_path),
+                              profile_dir));
++  instance_ = launcher.get();
++  return launcher;
+ }
+ 
+ McpSidecarLauncher::McpSidecarLauncher(base::Process process,
+@@ -53,6 +71,9 @@ McpSidecarLauncher::McpSidecarLauncher(base::Process process,
+ }
+ 
+ McpSidecarLauncher::~McpSidecarLauncher() {
++  if (instance_ == this) {
++    instance_ = nullptr;
++  }
+   // A destroyed launcher must never relaunch the sidecar, even if the browser
+   // process is tearing down.
+   Shutdown();
+diff --git a/chrome/browser/mcp_sidecar_launcher.h b/chrome/browser/mcp_sidecar_launcher.h
+index 8aabbe3..441792e 100644
+--- a/chrome/browser/mcp_sidecar_launcher.h
++++ b/chrome/browser/mcp_sidecar_launcher.h
+@@ -41,6 +41,18 @@ class McpSidecarLauncher {
+   McpSidecarLauncher(const McpSidecarLauncher&) = delete;
+   McpSidecarLauncher& operator=(const McpSidecarLauncher&) = delete;
+ 
++  // Returns the launcher for the current browser process, or nullptr if the
++  // sidecar was never started (for example because the sidecar executable is
++  // missing). Must be called on the browser process UI thread.
++  static McpSidecarLauncher* Get();
++
++  // Returns true if the sidecar process is currently running. The check is
++  // non-blocking. Must be called on the browser process UI thread.
++  bool IsRunning() const;
++
++  // The profile directory the sidecar was launched with.
++  const base::FilePath& profile_dir() const { return profile_dir_; }
++
+   // Stops supervising the sidecar. Safe to call more than once. Call this
+   // during a clean browser shutdown so that a sidecar exit triggered by the
+   // browser going away is never treated as a relaunchable failure.
+@@ -72,6 +84,9 @@ class McpSidecarLauncher {
+   // port-conflict exit.
+   static constexpr int kMaxRelaunches = 1;
+ 
++  // The current process's launcher, or nullptr. UI thread only.
++  static McpSidecarLauncher* instance_;
++
+   base::Process process_;
+   const base::FilePath exe_path_;
+   const base::FilePath profile_dir_;
+diff --git a/chrome/browser/prefs/session_startup_pref.cc b/chrome/browser/prefs/session_startup_pref.cc
+index 0159cee..c44c030 100644
+--- a/chrome/browser/prefs/session_startup_pref.cc
++++ b/chrome/browser/prefs/session_startup_pref.cc
+@@ -58,7 +58,12 @@ void SessionStartupPref::RegisterProfilePrefs(
+   registry->RegisterIntegerPref(prefs::kRestoreOnStartup,
+                                 TypeToPrefValue(GetDefaultStartupType()),
+                                 flags);
+-  registry->RegisterListPref(prefs::kURLsToRestoreOnStartup, flags);
++  // EDI: fresh profiles open the chrome://edi status page at startup. The
++  // user can change this in the standard on-startup settings.
++  base::ListValue default_urls;
++  default_urls.Append("chrome://edi");
++  registry->RegisterListPref(prefs::kURLsToRestoreOnStartup,
++                             std::move(default_urls), flags);
+ }
+ 
+ // static
+@@ -66,12 +71,8 @@ SessionStartupPref::Type SessionStartupPref::GetDefaultStartupType() {
+ #if BUILDFLAG(IS_CHROMEOS)
+   return SessionStartupPref::LAST;
+ #else
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+-  if (features::kSetDefaultToContinueSession.Get()) {
+-    return SessionStartupPref::LAST;
+-  }
+-#endif
+-  return SessionStartupPref::DEFAULT;
++  // EDI: fresh profiles open the chrome://edi status page at startup.
++  return SessionStartupPref::URLS;
+ #endif
+ }
+ 
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+index eacc9e1..2c0f292 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -9,6 +9,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/browser_actuator/internals/browser_actuator_internals_ui.h"
+ #include "chrome/browser/contextual_tasks/contextual_tasks_ui.h"
++#include "chrome/browser/edi/edi_status_ui.h"
+ #include "chrome/browser/glic/experimental_opt_in/glic_experimental_opt_in_ui.h"
+ #include "chrome/browser/glic/host/glic_ui.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_internals_ui.h"
+@@ -287,6 +288,7 @@ void RegisterChromeWebUIConfigs() {
+   map.AddWebUIConfig(std::make_unique<CreditsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<DataSharingInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<DownloadInternalsUIConfig>());
++  map.AddWebUIConfig(std::make_unique<EdiStatusUIConfig>());
+   map.AddWebUIConfig(std::make_unique<FamilyLinkUserInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<FlagsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<glic::GlicExperimentalOptInUIConfig>());
+diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_constants.cc
+index a37f0a8..35560ec 100644
+--- a/chrome/common/webui_url_constants.cc
++++ b/chrome/common/webui_url_constants.cc
+@@ -120,6 +120,7 @@ bool IsSystemWebUIHost(std::string_view host) {
+ // Add hosts here to be suggested by BuiltinProvider.
+ base::span<const base::cstring_view> ChromeURLHosts() {
+   static constexpr auto kChromeURLHosts = std::to_array<base::cstring_view>({
++      "edi",
+       "ungoogled-first-run",
+       kChromeUIAboutHost,
+       kChromeUIAccessibilityHost,
