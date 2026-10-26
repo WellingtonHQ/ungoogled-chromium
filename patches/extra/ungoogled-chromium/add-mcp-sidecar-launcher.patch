@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/chrome/browser/mcp_sidecar_launcher.h
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,93 @@
 +// Copyright (c) 2026 The ungoogled-chromium Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -68,6 +68,14 @@
 +  // The sidecar's executable file name, expected next to the browser
 +  // executable.
 +  static constexpr char kSidecarExecutableName[] = "edi.exe";
++  // The browser switch that marks this launch as the agent browser. The agent
++  // browser's sidecar uses the fixed MCP endpoint from the user environment
++  // (EDI_BIND_PORT / EDI_MCP_TOKEN) so a static MCP client config always
++  // points at the same URL; every other browser gets an ephemeral port and a
++  // fresh token so several EDI browsers can run side by side.
++  static constexpr char kEdiAgentSwitch[] = "edi-agent";
++  // The environment variable the sidecar reads its bearer token from.
++  static constexpr wchar_t kSidecarTokenEnv[] = L"EDI_MCP_TOKEN";
 +  // The sidecar's exit code meaning its MCP port is already in use; the
 +  // sidecar expects to be relaunched so it can pick a different port.
 +  static constexpr int kSidecarExitPortConflict = 2;
@@ -88,16 +96,22 @@
 +#endif  // CHROME_BROWSER_MCP_SIDECAR_LAUNCHER_H_
 --- /dev/null
 +++ b/chrome/browser/mcp_sidecar_launcher.cc
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,157 @@
 +// Copyright (c) 2026 The ungoogled-chromium Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/mcp_sidecar_launcher.h"
 +
++#include <array>
++#include <cstdint>
++#include <string>
++
++#include "base/command_line.h"
 +#include "base/files/file_util.h"
 +#include "base/logging.h"
 +#include "base/process/launch.h"
++#include "base/rand_util.h"
 +#include "base/time/time.h"
 +#include "build/build_config.h"
 +
@@ -105,6 +119,22 @@
 +
 +// How often the supervisor checks the sidecar's state.
 +const base::TimeDelta kSuperviseInterval = base::Seconds(2);
++
++// Generates a fresh bearer token for a regular (non-agent) sidecar: 32
++// random bytes rendered as 64 lowercase hex chars, the same format the
++// sidecar uses for its own per-startup tokens.
++std::wstring GenerateSidecarToken() {
++  std::array<uint8_t, 32> bytes{};
++  base::RandBytes(bytes);
++  static const wchar_t* kHex = L"0123456789abcdef";
++  std::wstring token;
++  token.reserve(bytes.size() * 2);
++  for (uint8_t byte : bytes) {
++    token.push_back(kHex[byte >> 4]);
++    token.push_back(kHex[byte & 0x0f]);
++  }
++  return token;
++}
 +
 +}  // namespace
 +
@@ -137,7 +167,7 @@
 +                                       const base::FilePath& exe_path,
 +                                       const base::FilePath& profile_dir)
 +    : process_(std::move(process)),
-+      exe_path_(exe_path),
++      exe_path_(std::move(exe_path)),
 +      profile_dir_(profile_dir) {
 +  timer_.Start(FROM_HERE, kSuperviseInterval, this,
 +               &McpSidecarLauncher::OnSuperviseTimerFired);
@@ -162,7 +192,24 @@
 +  command_line.AppendArg("--profile-dir");
 +  command_line.AppendArgPath(profile_dir);
 +
++  // A regular browser must never contest the agent's fixed MCP endpoint: the
++  // user environment pins EDI_BIND_PORT / EDI_MCP_TOKEN for the agent
++  // browser, and a second sidecar binding the same port would fail to start.
++  // A non-agent sidecar gets an OS-assigned port and a fresh token.
++  const bool is_agent_browser =
++      base::CommandLine::ForCurrentProcess()->HasSwitch(kEdiAgentSwitch);
++  if (!is_agent_browser) {
++    command_line.AppendArg("--bind-port");
++    command_line.AppendArg("0");
++  }
++
 +  base::LaunchOptions options;
++  if (!is_agent_browser) {
++    // The fresh token goes in the child's environment, not its command line,
++    // so it never appears in the process list. The override outranks the
++    // inherited EDI_MCP_TOKEN value in the sidecar's config.
++    options.environment[kSidecarTokenEnv] = GenerateSidecarToken();
++  }
 +#if BUILDFLAG(IS_WIN)
 +  // The sidecar is a background service and must not open a console window.
 +  options.start_hidden = true;
