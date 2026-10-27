@@ -124,3 +124,4 @@ extra/ungoogled-chromium/install-edi-sidecar.patch
 extra/ungoogled-chromium/enable-password-saving-by-default.patch
 extra/ungoogled-chromium/fix-edi-cdp-null-group-model.patch
 extra/ungoogled-chromium/fix-single-tab-split-removal.patch
+extra/ungoogled-chromium/fix-edi-auto-no-sandbox-relaunch.patch

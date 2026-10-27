@@ -1,0 +1,61 @@
+diff --git a/chrome/app/chrome_exe_main_win.cc b/chrome/app/chrome_exe_main_win.cc
+index 5f9fa297f6..443e7fe054 100644
+--- a/chrome/app/chrome_exe_main_win.cc
++++ b/chrome/app/chrome_exe_main_win.cc
+@@ -308,6 +308,56 @@ int main() {
+   DCHECK(process_type.empty() ||
+          HasValidWindowsPrefetchArgument(*command_line));
+ 
++  // EDI self-healing --no-sandbox relaunch (browser process only).
++  //
++  // If the registry DWORD HKCU\Software\WellingtonHQ\EDI\AutoNoSandbox is 1,
++  // and this browser process was launched without --no-sandbox (and without
++  // the --edi-auto-no-sandbox marker that we add on relaunch), relaunch the
++  // same executable with the same arguments plus --no-sandbox and
++  // --edi-auto-no-sandbox, then exit. This lets the browser start sandboxed by
++  // default but self-heal into a no-sandbox run when the registry gate is
++  // enabled, without the user having to pass --no-sandbox manually.
++  //
++  // The --edi-auto-no-sandbox marker prevents an infinite relaunch loop: the
++  // relaunched process sees the marker and does not relaunch again.
++  //
++  // NOTE: This registry gate is a local-development convenience. It should be
++  // disabled (set AutoNoSandbox to 0, or delete the key) after the build is
++  // signed and distributed.
++  if (process_type.empty()) {
++    DWORD auto_no_sandbox = 0;
++    DWORD value_size = sizeof(auto_no_sandbox);
++    LSTATUS reg_status = ERROR_FILE_NOT_FOUND;
++    HKEY hkey = nullptr;
++    if (::RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WellingtonHQ\\EDI", 0,
++                        KEY_READ, &hkey) == ERROR_SUCCESS) {
++      reg_status = ::RegQueryValueExW(
++          hkey, L"AutoNoSandbox", nullptr, nullptr,
++          reinterpret_cast<LPBYTE>(&auto_no_sandbox), &value_size);
++      ::RegCloseKey(hkey);
++    }
++    if (reg_status == ERROR_SUCCESS && auto_no_sandbox == 1 &&
++        !command_line->HasSwitch("no-sandbox") &&
++        !command_line->HasSwitch("edi-auto-no-sandbox")) {
++      const std::wstring new_cmd_line =
++          std::wstring(::GetCommandLineW()) +
++          L" --no-sandbox --edi-auto-no-sandbox";
++      PROCESS_INFORMATION pi = {};
++      STARTUPINFOW si = {};
++      si.cb = sizeof(si);
++      if (::CreateProcessW(nullptr, const_cast<LPWSTR>(new_cmd_line.data()),
++                           nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si,
++                           &pi)) {
++        ::CloseHandle(pi.hProcess);
++        ::CloseHandle(pi.hThread);
++        // The new process takes over; exit this one immediately.
++        ::ExitProcess(0);
++      }
++      // If CreateProcessW failed, fall through and continue with the current
++      // (sandboxed) process.
++    }
++  }
++
+   if (process_type == crash_reporter::switches::kCrashpadHandler) {
+     // Check if we should monitor the exit code of this process
+     std::unique_ptr<ExitCodeWatcher> exit_code_watcher;
