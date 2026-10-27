@@ -1,0 +1,24 @@
+diff --git a/components/tabs/impl/tab_strip_collection.cc b/components/tabs/impl/tab_strip_collection.cc
+index bfb0b51..c6d7398 100644
+--- a/components/tabs/impl/tab_strip_collection.cc
++++ b/components/tabs/impl/tab_strip_collection.cc
+@@ -319,6 +319,19 @@ ScopedTab TabStripCollection::RemoveTabAtIndexRecursive(size_t index) {
+       tab_to_be_removed->GetParentCollection(GetPassKey());
+   CHECK(parent_collection);
+ 
++  // A split collection with a single tab cannot be removed wholesale:
++  // unlike groups, it is not parked in `detached_group_collections_`, so
++  // RemoveTabCollectionImpl() would destroy the split together with the tab
++  // it owns, making the MaybeRemoveTab() below a use-after-free that leads
++  // to the tab being destroyed twice. Unsplit the split first so the tab is
++  // removed from its live parent collection below.
++  if (parent_collection->type() == TabCollection::Type::SPLIT &&
++      parent_collection->TabCountRecursive() == 1) {
++    Unsplit(static_cast<SplitTabCollection*>(parent_collection)
++                ->GetSplitTabId());
++    parent_collection = tab_to_be_removed->GetParentCollection(GetPassKey());
++  }
++
+   // If it is the only tab in the group remove the collection.
+   if (parent_collection != unpinned_collection_ &&
+       parent_collection != pinned_collection_ &&

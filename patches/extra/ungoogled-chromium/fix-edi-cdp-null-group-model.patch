@@ -1,0 +1,68 @@
+diff --git a/chrome/browser/devtools/protocol/edi_handler.cc b/chrome/browser/devtools/protocol/edi_handler.cc
+index ca7e136..c0ba0c7 100644
+--- a/chrome/browser/devtools/protocol/edi_handler.cc
++++ b/chrome/browser/devtools/protocol/edi_handler.cc
+@@ -43,15 +43,25 @@ tabs::TabInterface* FindTabForTargetId(const std::string& target_id) {
+   return tabs::TabInterface::MaybeGetFromContents(web_contents);
+ }
+ 
+-// The CDP target id of the tab, creating the agent host if needed.
++// The CDP target id of the tab, creating the agent host if needed. This is
++// the *page* target id (the one Target.createTarget/Target.getTargets
++// report); the tab-scoped host from GetOrCreateForTab has a separate id
++// space and would not match what CDP clients see. Returns an empty string
++// if the tab has no page target (its contents are absent or being torn
++// down).
+ std::string TargetIdForTab(tabs::TabInterface* tab) {
+-  return content::DevToolsAgentHost::GetOrCreateForTab(tab->GetContents())
+-      ->GetId();
++  content::DevToolsAgentHost* host =
++      content::DevToolsAgentHost::GetOrCreateFor(tab->GetContents()).get();
++  return host ? host->GetId() : std::string();
+ }
+ 
+-// The group with |group_id| in |model|, if any.
++// The group with |group_id| in |model|, if any. Windows whose tab strip does
++// not support tab groups (e.g. app windows) have a null group model.
+ std::optional<tab_groups::TabGroupId> FindGroup(TabStripModel* model,
+                                                 const std::string& group_id) {
++  if (!model->SupportsTabGroups()) {
++    return std::nullopt;
++  }
+   for (const tab_groups::TabGroupId& id :
+        model->group_model()->ListTabGroups()) {
+     if (id.ToString() == group_id) {
+@@ -113,6 +123,10 @@ protocol::Response EdiHandler::AttachTabToGroup(
+   if (!model) {
+     return protocol::Response::InvalidRequest("tab has no tab strip model");
+   }
++  if (!model->SupportsTabGroups()) {
++    return protocol::Response::InvalidRequest(
++        "tab groups are not supported in this window");
++  }
+   const int index = model->GetIndexOfTab(tab);
+ 
+   std::optional<tab_groups::TabGroupId> group_id =
+@@ -197,7 +211,9 @@ protocol::Response EdiHandler::GetTabGroups(
+   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+       [&](BrowserWindowInterface* window) {
+         TabStripModel* model = window->GetTabStripModel();
+-        if (!model) {
++        // App windows have a tab strip without tab group support (null
++        // group model); skip them.
++        if (!model || !model->SupportsTabGroups()) {
+           return true;
+         }
+         for (const tab_groups::TabGroupId& id :
+@@ -217,7 +233,10 @@ protocol::Response EdiHandler::GetTabGroups(
+           const gfx::Range tab_range = group->ListTabs();
+           for (int i = tab_range.start(); i < tab_range.end(); ++i) {
+             if (tabs::TabInterface* tab = model->GetTabAtIndex(i)) {
+-              tab_ids->push_back(TargetIdForTab(tab));
++              const std::string tab_id = TargetIdForTab(tab);
++              if (!tab_id.empty()) {
++                tab_ids->push_back(tab_id);
++              }
+             }
+           }
+           groups->push_back(protocol::Edi::TabGroupInfo::Create()
