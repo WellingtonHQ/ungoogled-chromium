@@ -72,10 +72,10 @@ index 0000000000..79d6e7d
 +#endif  // CHROME_BROWSER_EDI_EDIT_TAB_TITLE_PREFIX_H_
 diff --git a/chrome/browser/edi/edi_tab_title_prefix.cc b/chrome/browser/edi/edi_tab_title_prefix.cc
 new file mode 100644
-index 0000000000..20742f2
+index 0000000000..033c76e
 --- /dev/null
 +++ b/chrome/browser/edi/edi_tab_title_prefix.cc
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,34 @@
 +// Copyright (c) 2026 Wellington Moreno. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -84,6 +84,8 @@ index 0000000000..20742f2
 +
 +#include "base/check.h"
 +#include "components/tabs/public/tab_interface.h"
++
++DEFINE_USER_DATA(EdiTabTitlePrefix);
 +
 +EdiTabTitlePrefix::EdiTabTitlePrefix(tabs::TabInterface& tab)
 +    : scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {}

@@ -174,10 +174,10 @@ index 0000000000..cc7c8378ae
 +#endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_EDIT_HANDLER_H_
 diff --git a/chrome/browser/devtools/protocol/edi_handler.cc b/chrome/browser/devtools/protocol/edi_handler.cc
 new file mode 100644
-index 0000000000..faaa32a
+index 0000000000..ca7e136
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/edi_handler.cc
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,258 @@
 +// Copyright (c) 2026 Wellington Moreno. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -185,6 +185,7 @@ index 0000000000..faaa32a
 +#include "chrome/browser/devtools/protocol/edi_handler.h"
 +
 +#include <algorithm>
++#include <optional>
 +#include <string>
 +#include <utility>
 +#include <vector>
@@ -198,6 +199,7 @@ index 0000000000..faaa32a
 +#include "chrome/browser/ui/tabs/tab_group_model.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "components/tab_groups/tab_group_color.h"
++#include "components/tab_groups/tab_group_id.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
 +#include "components/tabs/public/tab_group.h"
 +#include "components/tabs/public/tab_interface.h"
@@ -228,42 +230,33 @@ index 0000000000..faaa32a
 +}
 +
 +// The group with |group_id| in |model|, if any.
-+tab_groups::TabGroupId FindGroup(TabStripModel* model,
-+                                 const std::string& group_id) {
++std::optional<tab_groups::TabGroupId> FindGroup(TabStripModel* model,
++                                                const std::string& group_id) {
 +  for (const tab_groups::TabGroupId& id :
 +       model->group_model()->ListTabGroups()) {
 +    if (id.ToString() == group_id) {
 +      return id;
 +    }
 +  }
-+  return tab_groups::TabGroupId();  // Invalid.
++  return std::nullopt;
 +}
 +
 +// The TabStripModel owning the group with |group_id|, across all current
 +// windows (or nullptr if no window has it).
-+TabStripModel* FindModelForGroup(const std::string& group_id,
-+                                 tab_groups::TabGroupId* out_group) {
++TabStripModel* FindModelForGroup(const std::string& group_id) {
 +  TabStripModel* found_model = nullptr;
-+  tab_groups::TabGroupId found_group;
 +  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
 +      [&](BrowserWindowInterface* window) {
 +        TabStripModel* model = window->GetTabStripModel();
 +        if (!model) {
 +          return true;
 +        }
-+        for (const tab_groups::TabGroupId& id :
-+             model->group_model()->ListTabGroups()) {
-+          if (id.ToString() == group_id) {
-+            found_model = model;
-+            found_group = id;
-+            return false;
-+          }
++        if (FindGroup(model, group_id).has_value()) {
++          found_model = model;
++          return false;
 +        }
 +        return true;
 +      });
-+  if (found_model) {
-+    *out_group = found_group;
-+  }
 +  return found_model;
 +}
 +
@@ -276,7 +269,10 @@ index 0000000000..faaa32a
 +}  // namespace
 +
 +EdiHandler::EdiHandler(protocol::UberDispatcher* dispatcher) {
-+  dispatcher->wire(this);
++  // Dispatcher can be null in tests.
++  if (dispatcher) {
++    protocol::Edi::Dispatcher::wire(dispatcher, this);
++  }
 +}
 +
 +EdiHandler::~EdiHandler() = default;
@@ -299,23 +295,23 @@ index 0000000000..faaa32a
 +  }
 +  const int index = model->GetIndexOfTab(tab);
 +
-+  tab_groups::TabGroupId group_id;
-+  const bool existing =
-+      in_group_id.has_value() && !in_group_id->empty() &&
-+      (group_id = FindGroup(model, *in_group_id)) != tab_groups::TabGroupId();
-+  if (existing) {
-+    model->AddToExistingGroup({index}, group_id);
++  std::optional<tab_groups::TabGroupId> group_id =
++      (in_group_id.has_value() && !in_group_id->empty())
++          ? FindGroup(model, *in_group_id)
++          : std::nullopt;
++  if (group_id.has_value()) {
++    model->AddToExistingGroup({index}, *group_id);
 +  } else {
 +    // A new group always contains at least this tab.
 +    group_id = model->AddToNewGroup({index});
 +    model->ChangeTabGroupVisuals(
-+        group_id,
-+        tab_groups::TabGroupVisualData(base::UTF8UnsafeToUTF16(in_title),
++        *group_id,
++        tab_groups::TabGroupVisualData(base::UTF8ToUTF16(in_title),
 +                                       static_cast<tab_groups::TabGroupColorId>(
 +                                           ClampColor(in_color))),
 +        /*is_customized=*/true);
 +  }
-+  *out_group_id = group_id.ToString();
++  *out_group_id = group_id->ToString();
 +  return protocol::Response::Success();
 +}
 +
@@ -338,15 +334,18 @@ index 0000000000..faaa32a
 +protocol::Response EdiHandler::UpdateTabGroup(const std::string& in_group_id,
 +                                              const std::string& in_title,
 +                                              int in_color) {
-+  tab_groups::TabGroupId group_id;
-+  TabStripModel* model =
-+      FindModelForGroup(in_group_id, &group_id);
++  TabStripModel* model = FindModelForGroup(in_group_id);
 +  if (!model) {
 +    return protocol::Response::InvalidRequest("no such group");
 +  }
++  std::optional<tab_groups::TabGroupId> group_id =
++      FindGroup(model, in_group_id);
++  if (!group_id.has_value()) {
++    return protocol::Response::InvalidRequest("no such group");
++  }
 +  model->ChangeTabGroupVisuals(
-+      group_id,
-+      tab_groups::TabGroupVisualData(base::UTF8UnsafeToUTF16(in_title),
++      *group_id,
++      tab_groups::TabGroupVisualData(base::UTF8ToUTF16(in_title),
 +                                     static_cast<tab_groups::TabGroupColorId>(
 +                                         ClampColor(in_color))),
 +      /*is_customized=*/true);
@@ -361,9 +360,13 @@ index 0000000000..faaa32a
 +        "no tab for the given target id");
 +  }
 +  EdiTabTitlePrefix* prefix = EdiTabTitlePrefix::From(tab);
-+  prefix->SetPrefix(base::UTF8UnsafeToUTF16(in_prefix));
++  prefix->SetPrefix(base::UTF8ToUTF16(in_prefix));
 +  // Refresh the tab strip display; the document title is untouched.
-+  BrowserUiController::NotifyTabUIChanged(tab, TabChangeType::kAll);
++  BrowserWindowInterface* window = tab->GetBrowserWindowInterface();
++  if (BrowserUiController* controller =
++          BrowserUiController::From(window)) {
++    controller->NotifyTabUIChanged(tab, TabChangeType::kAll);
++  }
 +  return protocol::Response::Success();
 +}
 +
@@ -379,24 +382,30 @@ index 0000000000..faaa32a
 +        }
 +        for (const tab_groups::TabGroupId& id :
 +             model->group_model()->ListTabGroups()) {
-+          tab_groups::TabGroup* group = model->group_model()->GetTabGroup(id);
++          TabGroup* group = model->group_model()->GetTabGroup(id);
 +          if (!group) {
 +            continue;
 +          }
-+          protocol::Edi::TabGroupInfo info;
-+          info.id = id.ToString();
++          std::string title;
++          int color = 0;
 +          if (const tab_groups::TabGroupVisualData* visuals =
 +                  group->visual_data()) {
-+            info.title = base::UTF16ToUTF8(visuals->title());
-+            info.color = static_cast<int>(visuals->color());
++            title = base::UTF16ToUTF8(visuals->title());
++            color = static_cast<int>(visuals->color());
 +          }
++          auto tab_ids = std::make_unique<protocol::Array<std::string>>();
 +          const gfx::Range tab_range = group->ListTabs();
 +          for (int i = tab_range.start(); i < tab_range.end(); ++i) {
 +            if (tabs::TabInterface* tab = model->GetTabAtIndex(i)) {
-+              info.tabIds.push_back(TargetIdForTab(tab));
++              tab_ids->push_back(TargetIdForTab(tab));
 +            }
 +          }
-+          groups->push_back(std::move(info));
++          groups->push_back(protocol::Edi::TabGroupInfo::Create()
++                                .SetId(id.ToString())
++                                .SetTitle(title)
++                                .SetColor(color)
++                                .SetTabIds(std::move(tab_ids))
++                                .Build());
 +        }
 +        return true;
 +      });
@@ -405,12 +414,16 @@ index 0000000000..faaa32a
 +}
 +
 +protocol::Response EdiHandler::CloseTabGroup(const std::string& in_group_id) {
-+  tab_groups::TabGroupId group_id;
-+  TabStripModel* model = FindModelForGroup(in_group_id, &group_id);
++  TabStripModel* model = FindModelForGroup(in_group_id);
 +  if (!model) {
 +    return protocol::Response::Success();  // Already gone.
 +  }
-+  tab_groups::TabGroup* group = model->group_model()->GetTabGroup(group_id);
++  std::optional<tab_groups::TabGroupId> group_id =
++      FindGroup(model, in_group_id);
++  if (!group_id.has_value()) {
++    return protocol::Response::Success();
++  }
++  TabGroup* group = model->group_model()->GetTabGroup(*group_id);
 +  if (!group) {
 +    return protocol::Response::Success();
 +  }
