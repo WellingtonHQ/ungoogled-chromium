@@ -12,10 +12,10 @@ index 2525974..82a5ee4 100644
      }
 diff --git a/chrome/browser/edi/edi_status_ui.h b/chrome/browser/edi/edi_status_ui.h
 new file mode 100644
-index 0000000..df1f42b0 100644
+index 0000000..1d0dcf1 100644
 --- /dev/null
 +++ b/chrome/browser/edi/edi_status_ui.h
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,338 @@
 +// Copyright (c) 2026 Wellington Moreno. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -192,7 +192,9 @@ index 0000000..df1f42b0 100644
 +    requests_in_flight = dict.FindInt("requests_in_flight").value_or(0);
 +    started_at_unix_secs = dict.FindInt("started_at_unix_secs").value_or(0);
 +    if (const base::DictValue* agent_group = dict.FindDict("agent_group")) {
-+      agent_group_name = agent_group->FindString("name").value_or("");
++      agent_group_name =
++          agent_group->FindString("name") ? *agent_group->FindString("name")
++                                          : std::string();
 +      agent_group_tab_count = agent_group->FindInt("tab_count").value_or(0);
 +    }
 +  }
