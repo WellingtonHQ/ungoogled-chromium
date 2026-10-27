@@ -174,7 +174,7 @@ index 0000000000..cc7c8378ae
 +#endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_EDIT_HANDLER_H_
 diff --git a/chrome/browser/devtools/protocol/edi_handler.cc b/chrome/browser/devtools/protocol/edi_handler.cc
 new file mode 100644
-index 0000000000..79c17c1e7f
+index 0000000000..a4c8c0d
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/edi_handler.cc
 @@ -0,0 +1,245 @@
@@ -195,11 +195,11 @@ index 0000000000..79c17c1e7f
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 +#include "chrome/browser/ui/tabs/tab_change_type.h"
-+#include "chrome/browser/ui/tabs/tab_group.h"
 +#include "chrome/browser/ui/tabs/tab_group_model.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "components/tab_groups/tab_group_color.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
++#include "components/tabs/public/tab_group.h"
 +#include "components/tabs/public/tab_interface.h"
 +#include "content/public/browser/devtools_agent_host.h"
 +#include "content/public/browser/web_contents.h"

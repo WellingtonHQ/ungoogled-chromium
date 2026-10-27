@@ -19,10 +19,10 @@ index 0000000000..bcf6a71122
 +}
 diff --git a/chrome/browser/edi/edi_tab_title_prefix.h b/chrome/browser/edi/edi_tab_title_prefix.h
 new file mode 100644
-index 0000000000..6bd62b07fc
+index 0000000000..79d6e7d
 --- /dev/null
 +++ b/chrome/browser/edi/edi_tab_title_prefix.h
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,47 @@
 +// Copyright (c) 2026 Wellington Moreno. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -55,6 +55,9 @@ index 0000000000..6bd62b07fc
 +  // The prefix for |tab|, creating it if needed. |tab| must be non-null.
 +  static EdiTabTitlePrefix* From(tabs::TabInterface* tab);
 +
++  // The prefix for |tab| (read-only; no creation). |tab| must be non-null.
++  static const EdiTabTitlePrefix* From(const tabs::TabInterface* tab);
++
 +  // Sets the display prefix; an empty prefix clears it.
 +  void SetPrefix(const std::u16string& prefix);
 +
@@ -69,10 +72,10 @@ index 0000000000..6bd62b07fc
 +#endif  // CHROME_BROWSER_EDI_EDIT_TAB_TITLE_PREFIX_H_
 diff --git a/chrome/browser/edi/edi_tab_title_prefix.cc b/chrome/browser/edi/edi_tab_title_prefix.cc
 new file mode 100644
-index 0000000000..d4b2493960
+index 0000000000..20742f2
 --- /dev/null
 +++ b/chrome/browser/edi/edi_tab_title_prefix.cc
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,32 @@
 +// Copyright (c) 2026 Wellington Moreno. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -93,6 +96,13 @@ index 0000000000..d4b2493960
 +    return existing;
 +  }
 +  return new EdiTabTitlePrefix(*tab);
++}
++
++// static
++const EdiTabTitlePrefix* EdiTabTitlePrefix::From(
++    const tabs::TabInterface* tab) {
++  DCHECK(tab);
++  return Get(tab->GetUnownedUserDataHost());
 +}
 +
 +void EdiTabTitlePrefix::SetPrefix(const std::u16string& prefix) {
